@@ -1,4 +1,5 @@
 import { PAPER_SLIPPAGE_BPS, PAPER_TAKER_FEE_BPS } from "../defaults";
+import { DEFAULT_BORROW_DAILY, HARD_MAX_LEVERAGE, borrowCost, liquidationPrice, marginAndBorrow } from "../trading/margin";
 import { dubaiDayKey } from "../time";
 import { evaluateOrder } from "../risk/engine";
 import { classifyDailyTarget, maxDrawdown, monthlyReturns, sharpeRatio, type DailyTargetReport, type MonthRow } from "../targets";
@@ -47,6 +48,8 @@ export interface BacktestConfig {
   barDurationMs: number;
   minSz: number;
   lotSz: number;
+  /** Frozen daily simple rate on borrowed USDT. */
+  borrowDailyRate: number;
   targets: { dailyLow: number; dailyHigh: number };
 }
 
@@ -75,6 +78,9 @@ export interface BacktestResult {
   losers: number;
   profitFactor: number | null;
   feesPaid: number;
+  borrowPaid: number;
+  liquidations: number;
+  leverage: number;
   rejectedEntries: number;
   monthlyReturns: MonthRow[];
   daily: DailyTargetReport;
@@ -101,11 +107,12 @@ const DEFAULTS: BacktestConfig = {
     maxDailyLossPct: 0.015,
     maxDrawdownPct: 0.08,
     perTradeRiskPct: 0.004,
-    maxLeverage: 1,
+    maxLeverage: HARD_MAX_LEVERAGE,
   },
   barDurationMs: 60 * 60 * 1000,
   minSz: 0,
   lotSz: 0,
+  borrowDailyRate: DEFAULT_BORROW_DAILY,
   targets: { dailyLow: 0.02, dailyHigh: 0.03 },
 };
 
@@ -119,14 +126,24 @@ function feeOf(notional: number, bps: number): number {
 }
 
 export function runBacktest(candles: Candle[], strategy: StrategyInstance, config: Partial<BacktestConfig> = {}): BacktestResult {
-  const cfg: BacktestConfig = { ...DEFAULTS, ...config, limits: { ...DEFAULTS.limits, ...config.limits }, targets: { ...DEFAULTS.targets, ...config.targets } };
+  const cfg: BacktestConfig = {
+    ...DEFAULTS,
+    ...config,
+    limits: { ...DEFAULTS.limits, ...config.limits, maxLeverage: Math.min(HARD_MAX_LEVERAGE, config.limits?.maxLeverage ?? DEFAULTS.limits.maxLeverage) },
+    targets: { ...DEFAULTS.targets, ...config.targets },
+  };
+  const leverage = Math.min(HARD_MAX_LEVERAGE, Math.max(1, cfg.limits.maxLeverage));
   let cash = cfg.initialEquity;
   let qty = 0;
   let avg = 0;
   let stop: number | null = null;
   let take: number | null = null;
+  let borrowed = 0;
+  let liq: number | null = null;
   let entryTime = 0;
   let entryPrice = 0;
+  let borrowPaid = 0;
+  let liquidations = 0;
   let pending: Pending | null = null;
   let feesPaid = 0;
   let rejectedEntries = 0;
@@ -138,23 +155,36 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
 
   const position = (): OpenLot | null => (qty > 0 ? { qty, avgPrice: avg, stopLoss: stop, takeProfit: take } : null);
 
+  const equityAt = (mark: number) => (qty > 0 && borrowed > 0 ? cash + qty * mark - borrowed : cash + qty * mark);
+
   const closeAt = (raw: number, time: number, reason: string) => {
     const fill = slip(raw, "sell", cfg.slippageBps);
     const fee = feeOf(fill * qty, cfg.feeBps);
-    const sold = applySell({ cash, qty, avgPrice: avg }, fill, qty, fee);
+    let pnl: number;
+    if (borrowed > 0) {
+      const proceeds = fill * qty - fee;
+      cash += proceeds - borrowed;
+      pnl = (fill - avg) * qty - fee;
+    } else {
+      const sold = applySell({ cash, qty, avgPrice: avg }, fill, qty, fee);
+      cash = sold.cash;
+      pnl = sold.realizedPnl;
+    }
     feesPaid += fee;
+    if (reason.startsWith("liquidat")) liquidations += 1;
     trades.push({
       entryTime,
       exitTime: time,
       entryPrice,
       exitPrice: fill,
       qty,
-      pnl: sold.realizedPnl,
+      pnl,
       reason,
     });
-    cash = sold.cash;
     qty = 0;
     avg = 0;
+    borrowed = 0;
+    liq = null;
     stop = null;
     take = null;
   };
@@ -164,7 +194,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
     const key = dubaiDayKey(new Date(bar.time));
     if (key !== dayKey) {
       dayKey = key;
-      dayStart = cash + qty * bar.open;
+      dayStart = equityAt(bar.open);
     }
 
     if (pending?.kind === "buy" && qty === 0) {
@@ -180,21 +210,34 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
           side: "buy",
           qty: pending.qty,
           price: fill,
-          leverage: 1,
+          leverage,
           stopLoss: pending.stopLoss,
           currentQty: 0,
           feeBps: cfg.feeBps,
         },
       });
-      const cost = fill * pending.qty + feeOf(fill * pending.qty, cfg.feeBps);
-      if (!decision.allowed || cost > cash) {
+      const fee = feeOf(fill * pending.qty, cfg.feeBps);
+      const parts = marginAndBorrow(fill * pending.qty, leverage);
+      if (!decision.allowed || parts.margin + fee > cash) {
         rejectedEntries += 1;
+      } else if (leverage > 1) {
+        cash -= parts.margin + fee;
+        qty = pending.qty;
+        avg = fill + fee / pending.qty;
+        borrowed = parts.borrowed;
+        liq = liquidationPrice(fill, leverage);
+        stop = pending.stopLoss;
+        take = pending.takeProfit;
+        entryTime = bar.time;
+        entryPrice = fill;
+        feesPaid += fee;
       } else {
-        const fee = feeOf(fill * pending.qty, cfg.feeBps);
         const bought = applyBuy({ cash, qty, avgPrice: avg }, fill, pending.qty, fee);
         cash = bought.cash;
         qty = bought.qty;
         avg = bought.avgPrice;
+        borrowed = 0;
+        liq = null;
         stop = pending.stopLoss;
         take = pending.takeProfit;
         entryTime = bar.time;
@@ -207,7 +250,9 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       pending = null;
     }
 
-    if (qty > 0 && stop != null && take != null && bar.low <= stop && bar.high >= take) {
+    if (qty > 0 && liq != null && bar.open <= liq) {
+      closeAt(bar.open, bar.time, "liquidated on a gap through the liquidation price");
+    } else if (qty > 0 && stop != null && take != null && bar.low <= stop && bar.high >= take) {
       const raw = bar.open <= stop ? bar.open : stop;
       closeAt(raw, bar.time, "stop (stop and target both traded; stop is assumed first)");
     } else if (qty > 0 && stop != null && bar.low <= stop) {
@@ -216,9 +261,11 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
     } else if (qty > 0 && take != null && bar.high >= take) {
       const raw = bar.open >= take ? bar.open : take;
       closeAt(raw, bar.time, "take-profit");
+    } else if (qty > 0 && liq != null && bar.low <= liq) {
+      closeAt(liq, bar.time, "liquidated");
     }
 
-    const equityNow = cash + qty * bar.close;
+    const equityNow = equityAt(bar.close);
     if (equityNow > peak) peak = equityNow;
     const history = candles.slice(0, i + 1);
     const signal = strategy.onBar({
@@ -272,7 +319,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
             side: "buy",
             qty: orderQty,
             price: bar.close,
-            leverage: 1,
+            leverage,
             stopLoss,
             currentQty: 0,
             feeBps: cfg.feeBps,
@@ -291,7 +338,12 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       }
     }
 
-    const marked = cash + qty * bar.close;
+    if (qty > 0 && borrowed > 0) {
+      const cost = borrowCost(borrowed, cfg.borrowDailyRate, cfg.barDurationMs);
+      cash -= cost;
+      borrowPaid += cost;
+    }
+    const marked = equityAt(bar.close);
     if (marked > peak) peak = marked;
     curve.push({ time: bar.time, equity: marked });
   }
@@ -321,6 +373,9 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
     losers: losers.length,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
     feesPaid,
+    borrowPaid,
+    liquidations,
+    leverage,
     rejectedEntries,
     monthlyReturns: monthlyReturns(curve, cfg.initialEquity, cfg.principal),
     daily,
@@ -332,8 +387,8 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       "If a bar trades through both the stop and the target, the stop is filled and the target is ignored.",
       "A gap through the stop fills at the open, not at the stop.",
       `Fees are ${cfg.feeBps} bps per side and slippage is ${cfg.slippageBps} bps. Stops are not free.`,
-      "Size comes from the per-trade risk budget and the stop, then the position cap. The backtest uses the same risk engine as live paper orders.",
-      "Spot only, leverage 1×. Shorts are not opened.",
+      "Size comes from the per-trade risk budget and the stop, then the margin cap times leverage. The backtest uses the same risk engine as paper orders.",
+      `Isolated margin at ${leverage}×. Notional cap is ${(cfg.limits.maxPositionPct * leverage * 100).toFixed(0)}% of equity. Borrow is charged at a frozen ${(cfg.borrowDailyRate * 100).toFixed(5)}% per day on the borrowed USDT (OKX basic USDT rate, not stacked with perp funding). A long is liquidated if price trades through the isolated liquidation price before the stop. Shorts are not opened.`,
       `A day "hits" the target only when that day's mark-to-market P&L divided by the starting principal sits inside ${(cfg.targets.dailyLow * 100).toFixed(2)}–${(cfg.targets.dailyHigh * 100).toFixed(2)}%. Days above the band are exceeded, not hits. Flat days are misses.`,
       "The partial last OKX candle is dropped before this run. No parameter search is applied.",
     ],

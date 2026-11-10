@@ -89,7 +89,7 @@ export default function RiskPage() {
       <div>
         <h1 className="text-2xl font-semibold">Risk</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-          These checks run on the server for every paper order and inside the backtest. At the {usd(principal, 0)} principal they mean a {usd(dollars.position)} position cap, {usd(dollars.trade)} per trade, a {usd(dollars.loss)} daily loss stop, and a {usd(dollars.dd)} drawdown stop. Leverage cap {settings.limits.maxLeverage}×. Orders are still spot.
+          These checks run on the server for every paper order and inside the backtest. At the {usd(principal, 0)} principal the margin budget is {usd(dollars.position)}. At {settings.limits.maxLeverage}× that is {usd(dollars.position * settings.limits.maxLeverage)} of notional. Per trade {usd(dollars.trade)}, daily loss stop {usd(dollars.loss)}, drawdown stop {usd(dollars.dd)}. The hard ceiling is 2×.
         </p>
       </div>
       {error && <div className="panel p-3 text-sm text-[var(--down)]">{error}</div>}
@@ -100,7 +100,7 @@ export default function RiskPage() {
         <Pct label="Daily loss stop" value={settings.limits.maxDailyLossPct} onChange={(value) => setSettings({ ...settings, limits: { ...settings.limits, maxDailyLossPct: value } })} />
         <Pct label="Max drawdown" value={settings.limits.maxDrawdownPct} onChange={(value) => setSettings({ ...settings, limits: { ...settings.limits, maxDrawdownPct: value } })} />
         <Field label="Leverage cap">
-          <Input type="number" min={1} max={5} step={1} value={settings.limits.maxLeverage} onChange={(event) => setSettings({ ...settings, limits: { ...settings.limits, maxLeverage: Number(event.target.value) } })} />
+          <Input type="number" min={1} max={2} step={1} value={settings.limits.maxLeverage} onChange={(event) => setSettings({ ...settings, limits: { ...settings.limits, maxLeverage: Number(event.target.value) } })} />
         </Field>
         <Field label="Review months">
           <Input type="number" min={1} max={12} value={settings.leverageReviewMonths} onChange={(event) => setSettings({ ...settings, leverageReviewMonths: Number(event.target.value) })} />

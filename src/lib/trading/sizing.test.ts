@@ -37,7 +37,7 @@ describe("spot sizing for $50,000", () => {
       lotSz: 0.00000001,
     });
     expect(sized.ok).toBe(true);
-    expect(sized.notional).toBeLessThanOrEqual(5_000 + 1e-4);
+    expect(sized.notional).toBeLessThanOrEqual(10_000 + 1e-4);
     expect(sized.riskPct ?? 1).toBeLessThan(0.004);
   });
 

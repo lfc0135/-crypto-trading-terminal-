@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { okxKeysPresent, publicMode, readConfig } from "../config";
 import { DEMO_PHRASE, LIVE_PHRASE, resolvedMonthly } from "../defaults";
 import { GMGN_USDC, gmgnRank, gmgnSecurity, gmgnSwap, gmgnToken, priceFromTokenInfo } from "../brokers/gmgn";
-import { getCandles, getInstrument, getOrderBook, getSpotTickers, okxPlaceSpotOrder } from "../brokers/okx";
+import { getCandles, getInstrument, getOrderBook, getSpotTickers, getUsdtBorrowDailyRate, okxPlaceSpotOrder } from "../brokers/okx";
 import { runBacktest } from "../backtest/engine";
 import { normalizeSettings } from "../settings";
 import { BAR_MS, defaultParams, getStrategy, normalizeBar, STRATEGIES } from "../strategies";
@@ -11,6 +11,7 @@ import { bandOutcome, maxDrawdown } from "../targets";
 import { dubaiDayKey, dubaiMonthKey, formatDubai } from "../time";
 import { leverageReview } from "../trading/review";
 import { cancelPaperOrder, markBook, marksEquity, placePaperOrder, previewPaperOrder, reservedCash, type OrderInput, type Quote } from "../trading/book";
+import { HARD_MAX_LEVERAGE, exposureCapPct } from "../trading/margin";
 import type { GmgnChain, GmgnCandidate, InstrumentSpec, Ledger, ScreenedToken } from "../types";
 import { evaluateGmgnCandidate, parseRankItem, parseSecurity } from "../watchlist/gmgn-filter";
 import { isEligibleSpot, rankOkxSpot } from "../watchlist/rank";
@@ -94,7 +95,7 @@ function snapshot(ledger: Ledger, marks: Record<string, number>) {
   const drawdownPct = account.peakEquity > 0 ? (account.peakEquity - equity) / account.peakEquity : 0;
   const dailyLossPct = account.dayStartEquity > 0 ? (account.dayStartEquity - equity) / account.dayStartEquity : 0;
   const limits = ledger.settings.limits;
-  const maxPositionUsd = equity * limits.maxPositionPct;
+  const maxPositionUsd = equity * exposureCapPct(limits.maxPositionPct, limits.maxLeverage);
   const review = leverageReview({
     createdAt: account.createdAt,
     now: Date.now(),
@@ -352,7 +353,7 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
       stopLoss: typeof raw.stopLoss === "number" ? raw.stopLoss : null,
       takeProfit: typeof raw.takeProfit === "number" ? raw.takeProfit : null,
       sizeFromRisk: raw.sizeFromRisk === true,
-      leverage: typeof raw.leverage === "number" ? raw.leverage : 1,
+      leverage: venue === "gmgn" ? 1 : (typeof raw.leverage === "number" ? raw.leverage : Math.min(HARD_MAX_LEVERAGE, ledger.settings.limits.maxLeverage)),
       chain,
       address,
     };
@@ -371,6 +372,7 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
             limitPrice: input.limitPrice,
             stopLoss: input.stopLoss,
             takeProfit: input.takeProfit,
+            leverage: input.leverage,
           });
           const note = sent.protectionError
             ? `OKX accepted the order. The stop/target was rejected: ${sent.protectionError}`
@@ -423,9 +425,10 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
       const message = error instanceof Error ? error.message : "Could not price the order.";
       return { ok: false as const, message, reasons: [message] };
     }
+    const borrowDailyRate = venue === "okx" && (input.leverage ?? 1) > 1 ? await getUsdtBorrowDailyRate() : undefined;
     const outcome = commit
-      ? placePaperOrder(ledger, input, quote, spec)
-      : previewPaperOrder(ledger, input, quote, spec);
+      ? placePaperOrder(ledger, input, quote, spec, borrowDailyRate)
+      : previewPaperOrder(ledger, input, quote, spec, borrowDailyRate);
     if (commit && !outcome.ok) {
       ledger.account.audits.unshift({ id: crypto.randomUUID(), ts: Date.now(), level: "warn", kind: "reject", message: outcome.message });
     }

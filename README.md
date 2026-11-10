@@ -22,18 +22,19 @@ Open [http://127.0.0.1:43123](http://127.0.0.1:43123). No API keys are required.
 - **Markets** — BTC, ETH, and SOL pinned, plus liquid OKX USDT pairs ranked by 24h quote volume and capped momentum. Public candles and the order book. On-chain rows appear only when `GMGN_API_KEY` is set and the token passes the safety rules.
 - **Trade** — market and limit spot orders with a stop and a target. Size can come from the stop and the per-trade risk budget. Preview uses the same server checks as a fill.
 - **Strategies** — EMA momentum, mean reversion, a Dubai-session opening-range breakout, and an intraday momentum breakout (1m–15m, flat by the Dubai close). Backtests use closed OKX candles.
-- **Risk** — edit the caps, the target band, and the watchlist rules. Leverage defaults to 1×.
+- **Risk** — edit the caps, the target band, and the watchlist rules. Leverage defaults to 2× isolated margin, and 2× is the ceiling.
 - **Journal** — fills and an audit trail of rejects and kill-switch trips.
 
 ## Risk defaults ($50,000)
 
 | Control | Default | Dollars |
 | --- | --- | --- |
-| Position cap | 10% of equity | $5,000 |
+| Margin budget | 10% of equity | $5,000 |
+| Notional at 2× | 20% of equity | $10,000 |
 | Per-trade risk | 0.4% of equity, including round-trip fees | $200 |
 | Daily loss kill switch | 1.5% of the Dubai-day starting equity | $750 |
 | Drawdown kill switch | 8% from peak equity | $4,000 |
-| Leverage cap | 1× | spot only |
+| Leverage | 2× isolated margin | hard ceiling 2× |
 
 OKX spot minimums are far below those sizes on the majors (BTC-USDT `minSz` 0.00001, ETH-USDT 0.0001, SOL-USDT 0.01). If a risk-based size is still under an instrument minimum, the order is rejected. It is not rounded up.
 
@@ -43,9 +44,17 @@ When the daily loss or drawdown switch is on, new risk is blocked. Reducing a lo
 
 ## Leverage
 
-The cap is a setting and can be raised on the Risk page (1–5). This build still routes **spot only**. Raising the number does not enable margin or perps.
+The default cap is **2× isolated margin**, and 2× is also the hard ceiling. A saved setting above 2 is clamped. Going higher means changing `HARD_MAX_LEVERAGE` in `src/lib/trading/margin.ts`.
 
-The book suggests looking at the cap only after 3 completed Dubai months in a row show positive realized paper P&L, and only if the drawdown switch has never tripped. The month the book was opened, and the current month, do not count. Meeting the bar is a review prompt, not a reason to borrow and not a path to the daily target.
+OKX spot at 2× is not a cash trade. Paper models it as isolated margin:
+
+- Margin posted is notional / 2. The other half is borrowed USDT.
+- Borrow accrues at OKX’s public basic USDT daily rate (`GET /api/v5/public/interest-rate-loan-quota`). Backtests freeze that rate at `0.00010968` per day (the quote on 10 Nov 2026, about 4.0% a year) so the result does not drift. Perp funding is not added on top of borrow.
+- A long liquidates when mark falls to `entry × (1 - 1/leverage) / (1 - 0.004)`. At 2× that is just under a 50% drop. `0.004` is the maintenance rate used here, in the neighborhood of OKX BTC tier-1. A stop at or below that price is rejected.
+- The per-trade risk check is still stop distance × size + fees, capped at 0.4% of equity. Leverage does not relax the daily-loss or drawdown switches.
+- On-chain GMGN paper stays at 1×. This book does not open shorts.
+
+Live and demo OKX orders, only after the existing arming phrases, call `POST /api/v5/account/set-leverage` with `lever: "2"` and `mgnMode: "isolated"` before the order, and send the order with `tdMode: "isolated"`. If set-leverage fails, the order is not sent.
 
 ## Targets
 
@@ -87,7 +96,7 @@ Chains in this desk: Solana, BSC, Base.
 
 ## Limitations
 
-- No equities and no FX. Spot only. Perps are not routed.
+- No equities and no FX. OKX orders are isolated margin on USDT pairs (2× cap), not perp swaps. On-chain orders are unlevered. Shorts are not opened.
 - Live OKX and live GMGN paths are implemented and gated, and were not executed here (no keys, and live is off).
 - GMGN rank `price_change_percent` came back as a percent (for example `1927` for a large move) on a live read. K-line docs disagree about whether `volume` is tokens or dollars; charts use OHLC only.
 - Security `buy_tax` / `sell_tax` were `0` on a BONK read. Values above 1 are treated as percent, values from 0 to 1 as a fraction. That unit is inferred.

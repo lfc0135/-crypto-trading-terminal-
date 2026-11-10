@@ -7,7 +7,7 @@ export interface RiskLimits {
   maxDrawdownPct: number;
   /** Stop distance × size + round-trip fees, over equity. */
   perTradeRiskPct: number;
-  /** Ceiling. This build still routes spot only (1×). */
+  /** Isolated-margin ceiling. Hard-capped at 2× in the engine. */
   maxLeverage: number;
 }
 
@@ -56,6 +56,8 @@ export interface Settings {
   targets: TargetSettings;
   watch: WatchRules;
   leverageReviewMonths: number;
+  /** Set once the book has been moved onto the 2× margin default. */
+  marginRev?: number;
 }
 
 export interface Candle {
@@ -78,6 +80,13 @@ export interface Position {
   openedAt: number;
   chain?: GmgnChain;
   address?: string;
+  /** 1 is unlevered spot. Above 1 is isolated margin. */
+  leverage?: number;
+  margin?: number;
+  borrowed?: number;
+  liquidationPrice?: number | null;
+  borrowDailyRate?: number;
+  lastBorrowTs?: number;
 }
 
 export interface WorkingOrder {
@@ -94,6 +103,8 @@ export interface WorkingOrder {
   createdAt: number;
   chain?: GmgnChain;
   address?: string;
+  leverage?: number;
+  borrowDailyRate?: number;
 }
 
 export interface Fill {
@@ -106,7 +117,7 @@ export interface Fill {
   price: number;
   fee: number;
   realizedPnl: number;
-  orderType: "market" | "limit" | "stop" | "take-profit";
+  orderType: "market" | "limit" | "stop" | "take-profit" | "liquidation";
   route: "paper";
   note: string;
 }

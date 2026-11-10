@@ -3,6 +3,7 @@ import { ONCHAIN_PAPER_FEE_BPS, ONCHAIN_PAPER_SLIPPAGE_BPS, PAPER_SLIPPAGE_BPS, 
 import { evaluateOrder } from "../risk/engine";
 import { dubaiDayKey } from "../time";
 import { applyBuy, applySell } from "./accounting";
+import { DEFAULT_BORROW_DAILY, HARD_MAX_LEVERAGE, borrowCost, liquidationPrice, marginAndBorrow } from "./margin";
 import { floorToStep, sizeLongSpot } from "./sizing";
 import type { Fill, GmgnChain, Ledger, Position, WorkingOrder } from "../types";
 
@@ -58,7 +59,8 @@ function pushFill(ledger: Ledger, fill: Fill) {
 export function marksEquity(ledger: Ledger, marks: Record<string, number>): number {
   return ledger.account.positions.reduce((sum, position) => {
     const mark = marks[position.symbol] ?? position.avgPrice;
-    return sum + position.qty * mark;
+    const borrowed = position.borrowed ?? 0;
+    return sum + position.qty * mark - borrowed;
   }, ledger.account.cash);
 }
 
@@ -88,8 +90,22 @@ function slipped(price: number, side: "buy" | "sell", venue: "okx" | "gmgn"): nu
 export function markBook(ledger: Ledger, marks: Record<string, number>, now = Date.now()) {
   const account = ledger.account;
   for (const position of [...account.positions]) {
+    const borrowed = position.borrowed ?? 0;
+    if (borrowed > 0) {
+      const last = position.lastBorrowTs ?? position.openedAt;
+      const cost = borrowCost(borrowed, position.borrowDailyRate ?? DEFAULT_BORROW_DAILY, now - last);
+      if (cost > 0) {
+        account.cash -= cost;
+        position.lastBorrowTs = now;
+      }
+    }
     const mark = marks[position.symbol];
     if (!(mark > 0)) continue;
+    const liq = position.liquidationPrice;
+    if (liq != null && mark <= liq) {
+      closePosition(ledger, position, slipped(Math.min(mark, liq), "sell", position.venue), "liquidation", "Liquidated. Mark traded through the isolated liquidation price.");
+      continue;
+    }
     if (position.stopLoss != null && mark <= position.stopLoss) {
       const raw = Math.min(position.stopLoss, mark);
       closePosition(ledger, position, slipped(raw, "sell", position.venue), "stop", "Stop filled in the paper book.");
@@ -133,15 +149,25 @@ export function markBook(ledger: Ledger, marks: Record<string, number>, now = Da
   }
 }
 
-function closePosition(ledger: Ledger, position: Position, price: number, orderType: Fill["orderType"], note: string) {
-  const fee = price * position.qty * feeRate(position.venue);
-  const sold = applySell(
-    { cash: ledger.account.cash, qty: position.qty, avgPrice: position.avgPrice },
-    price,
-    position.qty,
-    fee,
-  );
+function settleSell(ledger: Ledger, position: Position, price: number, qty: number): { fee: number; realizedPnl: number } {
+  const fee = price * qty * feeRate(position.venue);
+  const borrowed = position.borrowed ?? 0;
+  if (borrowed > 0) {
+    const portion = Math.min(1, qty / position.qty);
+    const borrowedPart = borrowed * portion;
+    ledger.account.cash += price * qty - fee - borrowedPart;
+    position.borrowed = borrowed - borrowedPart;
+    position.margin = (position.margin ?? 0) * (1 - portion);
+    return { fee, realizedPnl: (price - position.avgPrice) * qty - fee };
+  }
+  const sold = applySell({ cash: ledger.account.cash, qty: position.qty, avgPrice: position.avgPrice }, price, qty, fee);
   ledger.account.cash = sold.cash;
+  return { fee, realizedPnl: sold.realizedPnl };
+}
+
+function closePosition(ledger: Ledger, position: Position, price: number, orderType: Fill["orderType"], note: string) {
+  const { fee, realizedPnl } = settleSell(ledger, position, price, position.qty);
+  const sold = { cash: ledger.account.cash, realizedPnl };
   ledger.account.positions = ledger.account.positions.filter((item) => item.id !== position.id);
   ledger.account.openOrders = ledger.account.openOrders.filter((order) => order.symbol !== position.symbol || order.side !== "sell");
   pushFill(ledger, {
@@ -175,18 +201,18 @@ function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
       orderType: "limit",
       chain: order.chain,
       address: order.address,
+      leverage: order.leverage,
+      borrowDailyRate: order.borrowDailyRate,
       note: "Paper limit buy filled.",
     });
   } else {
     const position = ledger.account.positions.find((item) => item.symbol === order.symbol);
     if (!position) return;
     const qty = Math.min(order.qty, position.qty);
-    const fee = price * qty * feeRate(order.venue);
-    const sold = applySell({ cash: ledger.account.cash, qty: position.qty, avgPrice: position.avgPrice }, price, qty, fee);
-    ledger.account.cash = sold.cash;
-    position.qty = sold.qty;
-    position.avgPrice = sold.avgPrice;
+    const { fee, realizedPnl } = settleSell(ledger, position, price, qty);
+    position.qty -= qty;
     if (position.qty <= 1e-12) ledger.account.positions = ledger.account.positions.filter((item) => item.id !== position.id);
+    else if ((position.leverage ?? 1) > 1) position.liquidationPrice = liquidationPrice(position.avgPrice, position.leverage ?? 1);
     pushFill(ledger, {
       id: crypto.randomUUID(),
       ts: Date.now(),
@@ -196,7 +222,7 @@ function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
       qty,
       price,
       fee,
-      realizedPnl: sold.realizedPnl,
+      realizedPnl,
       orderType: "limit",
       route: "paper",
       note: "Paper limit sell filled.",
@@ -215,34 +241,74 @@ function openLong(ledger: Ledger, input: {
   chain?: GmgnChain;
   address?: string;
   note: string;
+  leverage?: number;
+  borrowDailyRate?: number;
 }) {
   const fee = input.price * input.qty * feeRate(input.venue);
+  const leverage = input.venue === "gmgn" ? 1 : Math.min(HARD_MAX_LEVERAGE, Math.max(1, input.leverage ?? 1));
   const existing = ledger.account.positions.find((position) => position.symbol === input.symbol);
-  const bought = applyBuy(
-    { cash: ledger.account.cash, qty: existing?.qty ?? 0, avgPrice: existing?.avgPrice ?? 0 },
-    input.price,
-    input.qty,
-    fee,
-  );
-  ledger.account.cash = bought.cash;
-  if (existing) {
-    existing.qty = bought.qty;
-    existing.avgPrice = bought.avgPrice;
-    if (input.stopLoss != null) existing.stopLoss = input.stopLoss;
-    if (input.takeProfit != null) existing.takeProfit = input.takeProfit;
+  const parts = marginAndBorrow(input.price * input.qty, leverage);
+  const unit = input.price + fee / input.qty;
+  if (leverage > 1) {
+    ledger.account.cash -= parts.margin + fee;
+    if (existing && (existing.borrowed ?? 0) > 0 && (existing.leverage ?? 1) === leverage) {
+      const qty = existing.qty + input.qty;
+      existing.avgPrice = (existing.avgPrice * existing.qty + unit * input.qty) / qty;
+      existing.qty = qty;
+      existing.margin = (existing.margin ?? 0) + parts.margin;
+      existing.borrowed = (existing.borrowed ?? 0) + parts.borrowed;
+      existing.liquidationPrice = liquidationPrice(existing.avgPrice, leverage);
+      existing.borrowDailyRate = input.borrowDailyRate ?? existing.borrowDailyRate ?? DEFAULT_BORROW_DAILY;
+      if (input.stopLoss != null) existing.stopLoss = input.stopLoss;
+      if (input.takeProfit != null) existing.takeProfit = input.takeProfit;
+    } else {
+      ledger.account.positions.push({
+        id: crypto.randomUUID(),
+        venue: input.venue,
+        symbol: input.symbol,
+        qty: input.qty,
+        avgPrice: unit,
+        stopLoss: input.stopLoss,
+        takeProfit: input.takeProfit,
+        openedAt: Date.now(),
+        chain: input.chain,
+        address: input.address,
+        leverage,
+        margin: parts.margin,
+        borrowed: parts.borrowed,
+        liquidationPrice: liquidationPrice(input.price, leverage),
+        borrowDailyRate: input.borrowDailyRate ?? DEFAULT_BORROW_DAILY,
+        lastBorrowTs: Date.now(),
+      });
+    }
   } else {
-    ledger.account.positions.push({
-      id: crypto.randomUUID(),
-      venue: input.venue,
-      symbol: input.symbol,
-      qty: bought.qty,
-      avgPrice: bought.avgPrice,
-      stopLoss: input.stopLoss,
-      takeProfit: input.takeProfit,
-      openedAt: Date.now(),
-      chain: input.chain,
-      address: input.address,
-    });
+    const bought = applyBuy(
+      { cash: ledger.account.cash, qty: existing?.qty ?? 0, avgPrice: existing?.avgPrice ?? 0 },
+      input.price,
+      input.qty,
+      fee,
+    );
+    ledger.account.cash = bought.cash;
+    if (existing) {
+      existing.qty = bought.qty;
+      existing.avgPrice = bought.avgPrice;
+      if (input.stopLoss != null) existing.stopLoss = input.stopLoss;
+      if (input.takeProfit != null) existing.takeProfit = input.takeProfit;
+    } else {
+      ledger.account.positions.push({
+        id: crypto.randomUUID(),
+        venue: input.venue,
+        symbol: input.symbol,
+        qty: bought.qty,
+        avgPrice: bought.avgPrice,
+        stopLoss: input.stopLoss,
+        takeProfit: input.takeProfit,
+        openedAt: Date.now(),
+        chain: input.chain,
+        address: input.address,
+        leverage: 1,
+      });
+    }
   }
   pushFill(ledger, {
     id: crypto.randomUUID(),
@@ -261,15 +327,16 @@ function openLong(ledger: Ledger, input: {
   audit(ledger, "info", "fill", `${input.note} ${input.symbol} ${input.qty} @ ${input.price.toFixed(6)}. Fee ${fee.toFixed(2)}.`);
 }
 
-export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote, spec: Spec): OrderOutcome {
-  const leverage = input.leverage ?? 1;
-  if (leverage !== 1) {
+export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote, spec: Spec, borrowDailyRate = DEFAULT_BORROW_DAILY): OrderOutcome {
+  const requested = input.venue === "gmgn" ? 1 : (input.leverage ?? ledger.settings.limits.maxLeverage);
+  if (requested > HARD_MAX_LEVERAGE + 1e-9) {
     return {
       ok: false,
-      message: "This desk routes spot only. Order leverage has to be 1×. Raising the cap does not turn on margin or perps.",
-      reasons: ["Spot only."],
+      message: `Hard ceiling is ${HARD_MAX_LEVERAGE}×. This order asked for ${requested}×.`,
+      reasons: [`Above the ${HARD_MAX_LEVERAGE}× ceiling.`],
     };
   }
+  const leverage = input.venue === "gmgn" ? 1 : Math.min(requested, ledger.settings.limits.maxLeverage);
   const touch = referencePrice(input, quote);
   if (!(touch > 0)) return { ok: false, message: "No price for that market.", reasons: ["Missing price."] };
   // Market orders pay the bid/ask plus slippage. Size and risk are checked at that fill, not at the untouched quote.
@@ -297,6 +364,7 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
       dayStartEquity: ledger.account.dayStartEquity,
       dailyKillLatched: ledger.account.dailyKillLatched,
       drawdownKillLatched: ledger.account.drawdownKillLatched,
+      leverage,
     });
     if (!sized.ok) return { ok: false, message: sized.reasons[0] ?? "Risk sizer refused the order.", reasons: sized.reasons };
     qty = sized.qty;
@@ -333,7 +401,7 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
       side: input.side,
       qty,
       price: fillPrice,
-      leverage: 1,
+      leverage,
       stopLoss: input.stopLoss ?? null,
       currentQty: input.side === "sell" ? currentQty - openSell : currentQty,
       feeBps: input.venue === "gmgn" ? ONCHAIN_PAPER_FEE_BPS : PAPER_TAKER_FEE_BPS,
@@ -345,12 +413,13 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
   const fee = fillPrice * qty * feeRate(input.venue);
   if (input.side === "buy") {
     const freeCash = ledger.account.cash - reservedCash(ledger);
-    if (fillPrice * qty + fee > freeCash + 1e-8) {
-      return { ok: false, message: "Not enough free cash after resting buy orders.", reasons: ["Insufficient cash."], estimatedQty: qty };
+    const cashNeed = (leverage > 1 ? (fillPrice * qty) / leverage : fillPrice * qty) + fee;
+    if (cashNeed > freeCash + 1e-8) {
+      return { ok: false, message: "Not enough free cash for the isolated margin and fee.", reasons: ["Insufficient cash."], estimatedQty: qty };
     }
   }
   if (input.side === "sell" && qty > currentQty - openSell + 1e-9) {
-    return { ok: false, message: "That sell is larger than the free long. Spot only — no short.", reasons: ["Insufficient position."] };
+    return { ok: false, message: "That sell is larger than the free long. The desk does not open shorts.", reasons: ["Insufficient position."] };
   }
 
   const marketable = input.type === "market"
@@ -368,10 +437,12 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
       limitPrice: input.limitPrice ?? fillPrice,
       stopLoss: input.stopLoss ?? null,
       takeProfit: input.takeProfit ?? null,
-      reservedCash: input.side === "buy" ? fillPrice * qty + fee : 0,
+      reservedCash: input.side === "buy" ? (leverage > 1 ? (fillPrice * qty) / leverage : fillPrice * qty) + fee : 0,
       createdAt: Date.now(),
       chain: input.chain,
       address: input.address,
+      leverage,
+      borrowDailyRate,
     };
     ledger.account.openOrders.push(order);
     audit(ledger, "info", "order", `Resting paper ${input.side} ${qty} ${input.symbol} @ ${order.limitPrice}.`);
@@ -391,16 +462,20 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
       orderType: input.type,
       chain: input.chain,
       address: input.address,
-      note: input.venue === "gmgn" ? "Paper on-chain buy. Priced from GMGN plus a slippage model, not a live swap." : "Paper spot buy.",
+      leverage,
+      borrowDailyRate,
+      note: input.venue === "gmgn"
+        ? "Paper on-chain buy. Priced from GMGN plus a slippage model, not a live swap."
+        : leverage > 1
+          ? `Paper isolated margin buy at ${leverage}×. Borrow ${(borrowDailyRate * 100).toFixed(5)}% per day on the borrowed USDT.`
+          : "Paper spot buy.",
     });
   } else if (position) {
     const price = input.type === "limit" && quote.bid > 0 ? Math.max(input.limitPrice ?? fillPrice, quote.bid) : fillPrice;
-    const feeSell = price * qty * feeRate(input.venue);
-    const sold = applySell({ cash: ledger.account.cash, qty: position.qty, avgPrice: position.avgPrice }, price, qty, feeSell);
-    ledger.account.cash = sold.cash;
-    position.qty = sold.qty;
-    position.avgPrice = sold.avgPrice;
+    const { fee: feeSell, realizedPnl } = settleSell(ledger, position, price, qty);
+    position.qty -= qty;
     if (position.qty <= 1e-12) ledger.account.positions = ledger.account.positions.filter((item) => item.id !== position.id);
+    else if ((position.leverage ?? 1) > 1) position.liquidationPrice = liquidationPrice(position.avgPrice, position.leverage ?? 1);
     pushFill(ledger, {
       id: crypto.randomUUID(),
       ts: Date.now(),
@@ -410,12 +485,12 @@ export function placePaperOrder(ledger: Ledger, input: OrderInput, quote: Quote,
       qty,
       price,
       fee: feeSell,
-      realizedPnl: sold.realizedPnl,
+      realizedPnl,
       orderType: input.type,
       route: "paper",
       note: "Paper spot sell.",
     });
-    audit(ledger, "info", "fill", `Paper sell ${input.symbol} ${qty} @ ${price.toFixed(6)}. Realized ${sold.realizedPnl.toFixed(2)}.`);
+    audit(ledger, "info", "fill", `Paper sell ${input.symbol} ${qty} @ ${price.toFixed(6)}. Realized ${realizedPnl.toFixed(2)}.`);
   }
   return {
     ok: true,
@@ -439,7 +514,7 @@ export function cancelPaperOrder(ledger: Ledger, id: string): OrderOutcome {
 }
 
 /** Same checks as a paper order, without mutating the book. */
-export function previewPaperOrder(ledger: Ledger, input: OrderInput, quote: Quote, spec: Spec): OrderOutcome {
+export function previewPaperOrder(ledger: Ledger, input: OrderInput, quote: Quote, spec: Spec, borrowDailyRate = DEFAULT_BORROW_DAILY): OrderOutcome {
   const clone = structuredClone(ledger);
-  return placePaperOrder(clone, input, quote, spec);
+  return placePaperOrder(clone, input, quote, spec, borrowDailyRate);
 }

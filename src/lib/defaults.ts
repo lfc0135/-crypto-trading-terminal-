@@ -4,16 +4,16 @@ import type { GmgnRules, RiskLimits, TargetSettings, WatchRules } from "./types"
 export const DEFAULT_PRINCIPAL = 50_000;
 
 /**
- * Conservative spot limits sized for a $50,000 book.
- * Dollars at the default principal: position $5,000, per-trade risk $200,
- * daily loss stop $750, drawdown stop $4,000. Leverage cap is 1×.
+ * Limits for a $50,000 book. Margin budget is 10% ($5,000). At the 2× cap that
+ * supports $10,000 of notional. Per-trade risk $200, daily loss stop $750,
+ * drawdown stop $4,000.
  */
 export const DEFAULT_LIMITS: RiskLimits = {
   maxPositionPct: 0.1,
   maxDailyLossPct: 0.015,
   maxDrawdownPct: 0.08,
   perTradeRiskPct: 0.004,
-  maxLeverage: 1,
+  maxLeverage: 2,
 };
 
 /** User scoreboard. Not a forecast and not what the risk engine is sized to produce. */

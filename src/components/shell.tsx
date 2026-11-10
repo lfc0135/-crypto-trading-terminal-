@@ -80,7 +80,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
         <div className="mt-auto px-2 text-[11px] leading-5 text-[var(--muted)]">
-          Spot only. Paper book by default. 2–3% a day is a scoreboard, not a plan.
+          Isolated margin up to 2×. Paper by default. 2–3% a day is a scoreboard, not a plan.
         </div>
       </aside>
       <div className="min-w-0">

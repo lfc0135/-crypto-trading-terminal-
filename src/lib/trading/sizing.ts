@@ -1,5 +1,6 @@
 import { evaluateOrder } from "../risk/engine";
 import type { RiskLimits } from "../types";
+import { clampLeverage, exposureCapPct } from "./margin";
 
 export function stepPrecision(step: number): number {
   if (!(step > 0) || !Number.isFinite(step)) return 8;
@@ -30,6 +31,7 @@ export interface SizeInput {
   dayStartEquity: number;
   dailyKillLatched: boolean;
   drawdownKillLatched: boolean;
+  leverage?: number;
 }
 
 export interface SizeResult {
@@ -52,11 +54,12 @@ export function sizeLongSpot(input: SizeInput): SizeResult {
   if (!(input.stop < input.price)) {
     return { ok: false, qty: 0, reasons: ["Stop must be below the entry to size from risk."], notional: 0, risk: null, riskPct: null, positionPct: null };
   }
+  const leverage = clampLeverage(input.leverage ?? input.limits.maxLeverage, input.limits.maxLeverage);
   const riskBudget = input.equity * input.limits.perTradeRiskPct;
   const stopDistance = input.price - input.stop;
   const feePerUnit = input.price * (Math.max(input.feeBps, 0) / 10_000) * 2;
   const rawQty = riskBudget / (stopDistance + feePerUnit);
-  const roomNotional = Math.max(0, input.equity * input.limits.maxPositionPct - input.currentQty * input.price);
+  const roomNotional = Math.max(0, input.equity * exposureCapPct(input.limits.maxPositionPct, leverage) - input.currentQty * input.price);
   const capQty = input.price > 0 ? roomNotional / input.price : 0;
   let qty = Math.min(rawQty, capQty);
   if (input.lotSz > 0) qty = floorToStep(qty, input.lotSz);
@@ -83,7 +86,7 @@ export function sizeLongSpot(input: SizeInput): SizeResult {
       side: "buy",
       qty,
       price: input.price,
-      leverage: 1,
+      leverage,
       stopLoss: input.stop,
       currentQty: input.currentQty,
       feeBps: input.feeBps,

@@ -17,7 +17,8 @@ describe("risk engine at a $50,000 principal", () => {
     expect(DEFAULT_PRINCIPAL * DEFAULT_LIMITS.perTradeRiskPct).toBe(200);
     expect(DEFAULT_PRINCIPAL * DEFAULT_LIMITS.maxDailyLossPct).toBe(750);
     expect(DEFAULT_PRINCIPAL * DEFAULT_LIMITS.maxDrawdownPct).toBe(4_000);
-    expect(DEFAULT_LIMITS.maxLeverage).toBe(1);
+    expect(DEFAULT_LIMITS.maxLeverage).toBe(2);
+    expect(DEFAULT_PRINCIPAL * DEFAULT_LIMITS.maxPositionPct * DEFAULT_LIMITS.maxLeverage).toBe(10_000);
   });
 
   it("allows a stopped spot buy inside the position and risk caps", () => {
@@ -38,7 +39,7 @@ describe("risk engine at a $50,000 principal", () => {
     expect(decision.metrics.tradeRiskPct ?? 1).toBeLessThanOrEqual(0.004);
   });
 
-  it("rejects leverage above the cap and allows it when the cap is raised", () => {
+  it("allows 2× and rejects anything above the hard ceiling", () => {
     const order = {
       side: "buy" as const,
       qty: 0.01,
@@ -48,31 +49,32 @@ describe("risk engine at a $50,000 principal", () => {
       currentQty: 0,
       feeBps: 10,
     };
-    expect(evaluateOrder({ ...base, order }).allowed).toBe(false);
-    expect(evaluateOrder({ ...base, order }).reasons.join(" ")).toMatch(/cap/);
-    const raised = evaluateOrder({
+    expect(evaluateOrder({ ...base, order }).allowed).toBe(true);
+    const tooHigh = evaluateOrder({
       ...base,
       limits: { ...DEFAULT_LIMITS, maxLeverage: 2 },
-      order,
+      order: { ...order, leverage: 3 },
     });
-    expect(raised.reasons.join(" ")).not.toMatch(/Leverage/);
+    expect(tooHigh.allowed).toBe(false);
+    expect(tooHigh.reasons.join(" ")).toMatch(/ceiling/);
   });
 
-  it("rejects a position larger than 10% of equity", () => {
+  it("rejects notional above the margin cap times leverage", () => {
     const decision = evaluateOrder({
       ...base,
       order: {
         side: "buy",
-        qty: 0.1,
+        qty: 0.2,
         price: 70_000,
-        leverage: 1,
-        stopLoss: 69_000,
+        leverage: 2,
+        stopLoss: 66_000,
         currentQty: 0,
         feeBps: 10,
       },
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.metrics.positionPct).toBeGreaterThan(0.1);
+    expect(decision.metrics.positionPct).toBeGreaterThan(0.2);
+    expect(decision.metrics.exposureCapPct).toBeCloseTo(0.2);
   });
 
   it("treats a missing stop as full-notional risk", () => {

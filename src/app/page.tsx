@@ -120,7 +120,7 @@ export default function DashboardPage() {
             <span>{pct(scale)}</span>
           </div>
           <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
-            A {pct(low)} day on principal is {usd(data.illustration.dollarsToDailyLow)} to {usd(data.illustration.dollarsToDailyHigh)}. The position cap is {usd(data.illustration.maxPositionUsd)}, so a full spot position has to move about {data.illustration.moveOnFullPosition == null ? "—" : pct(data.illustration.moveOnFullPosition)} to produce the low end of the band, before fees. The daily loss stop is {usd(data.illustration.dailyLossUsd)} ({pct(data.limits.maxDailyLossPct)}). Per-trade risk is {usd(data.illustration.perTradeUsd)}.
+            A {pct(low)} day on principal is {usd(data.illustration.dollarsToDailyLow)} to {usd(data.illustration.dollarsToDailyHigh)}. The notional cap at {data.limits.maxLeverage}× is {usd(data.illustration.maxPositionUsd)}, so a full position has to move about {data.illustration.moveOnFullPosition == null ? "—" : pct(data.illustration.moveOnFullPosition)} to produce the low end of the band, before fees and borrow. The daily loss stop is {usd(data.illustration.dailyLossUsd)} ({pct(data.limits.maxDailyLossPct)}). Per-trade risk is {usd(data.illustration.perTradeUsd)}.
           </p>
           <p className="mt-3 text-sm leading-6">
             Month realized {pct(data.realizedMonthReturn)} ({usd(data.realizedMonth)}). {data.targets.monthlyFollowsDaily ? "The monthly band follows the daily one, compounded for 30 days" : "Custom monthly band"}: {pct(data.targets.monthlyLow)} to {pct(data.targets.monthlyHigh)}. That month figure is the arithmetic consequence of repeating the daily band. It is not an operating plan. Status: {outcomeCopy[data.monthOutcome].toLowerCase()}.
@@ -131,10 +131,9 @@ export default function DashboardPage() {
       <section className="panel p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-sm font-medium">Leverage stays at {data.limits.maxLeverage}×</h2>
+            <h2 className="text-sm font-medium">Isolated margin, cap {data.limits.maxLeverage}×</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-              Spot only. This build will not send a leveraged or perp order even if the cap is raised. The review below is a gate for considering that change later: {data.review.requiredMonths} completed Dubai months of positive realized paper P&amp;L in a row, and the drawdown switch must never have tripped. Progress {data.review.streak}/{data.review.requiredMonths}.
-              {data.review.eligible ? " The paper record meets that bar. Raising the cap is still a manual choice, not a suggestion to borrow, and it does not make the daily target realistic." : ` ${data.review.reasons[0] ?? ""}`}
+              OKX paper buys use isolated margin at the cap, and 2× is the hard ceiling. You post notional divided by leverage and borrow the rest. USDT borrow accrues at the OKX public daily rate. A 2× long liquidates just under a 50% drop, and a stop at or below that price is refused. On-chain orders stay at 1×. Daily-loss and drawdown switches are unchanged. The old review bar is {data.review.streak}/{data.review.requiredMonths}. It does not raise the ceiling.
             </p>
           </div>
           <Badge tone={data.review.eligible ? "accent" : "neutral"}>{data.review.eligible ? "Review open" : "Review closed"}</Badge>

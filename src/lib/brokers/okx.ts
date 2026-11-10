@@ -1,3 +1,4 @@
+import { DEFAULT_BORROW_DAILY } from "../trading/margin";
 import { okxSign } from "./sign";
 import { okxKeysPresent, readConfig } from "../config";
 import type { Candle, InstrumentSpec, OkxTicker } from "../types";
@@ -113,6 +114,32 @@ export async function getOrderBook(instId: string, depth = 15): Promise<{ bids: 
   };
 }
 
+export async function okxSetLeverage(instId: string, leverage: number): Promise<unknown> {
+  return okxPrivate("POST", "/api/v5/account/set-leverage", {
+    instId,
+    lever: String(leverage),
+    mgnMode: "isolated",
+  });
+}
+
+let borrowCache: { at: number; rate: number } | null = null;
+
+/** Daily simple USDT borrow from OKX's public loan quota. Falls back to the frozen rate. */
+export async function getUsdtBorrowDailyRate(): Promise<number> {
+  if (borrowCache && Date.now() - borrowCache.at < 60 * 60_000) return borrowCache.rate;
+  try {
+    const data = await okxGet<Array<{ basic?: Array<{ ccy: string; rate: string }> }>>("/api/v5/public/interest-rate-loan-quota");
+    const rate = Number(data[0]?.basic?.find((row) => row.ccy === "USDT")?.rate);
+    if (rate > 0 && rate < 0.05) {
+      borrowCache = { at: Date.now(), rate };
+      return rate;
+    }
+  } catch {
+    /* public rate is optional */
+  }
+  return DEFAULT_BORROW_DAILY;
+}
+
 export async function okxPlaceSpotOrder(input: {
   instId: string;
   side: "buy" | "sell";
@@ -121,10 +148,14 @@ export async function okxPlaceSpotOrder(input: {
   limitPrice?: number;
   stopLoss?: number | null;
   takeProfit?: number | null;
+  leverage?: number;
 }): Promise<{ order: unknown; protectionError: string | null }> {
+  const leverage = Math.min(2, Math.max(1, input.leverage ?? 1));
+  const tdMode = leverage > 1 ? "isolated" : "cash";
+  if (leverage > 1) await okxSetLeverage(input.instId, leverage);
   const orderBody: Record<string, string> = {
     instId: input.instId,
-    tdMode: "cash",
+    tdMode,
     side: input.side,
     ordType: input.type,
     sz: String(input.qty),
@@ -139,7 +170,7 @@ export async function okxPlaceSpotOrder(input: {
   if (input.stopLoss || input.takeProfit) {
     const algo: Record<string, string> = {
       instId: input.instId,
-      tdMode: "cash",
+      tdMode,
       side: input.side === "buy" ? "sell" : "buy",
       sz: String(input.qty),
     };

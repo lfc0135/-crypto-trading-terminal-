@@ -20,7 +20,7 @@ describe("backtester", () => {
       onBar(ctx): Signal {
         if (ctx.history.some((bar) => bar.time > ctx.bar.time)) sawFuture = true;
         if (ctx.bar.close === 110) {
-          return { action: "buy", qty: 1, stopLoss: 50, takeProfit: 500, reason: "test" };
+          return { action: "buy", qty: 1, stopLoss: 100, takeProfit: 500, reason: "test" };
         }
         return { action: "hold" };
       },
@@ -34,7 +34,7 @@ describe("backtester", () => {
     });
     expect(sawFuture).toBe(false);
     expect(result.trades).toHaveLength(0);
-    expect(result.endingEquity).toBe(50_000);
+    expect(result.endingEquity).toBeCloseTo(50_000, 1);
   });
 
   it("uses the following open as the fill when another bar exists", () => {
@@ -45,7 +45,7 @@ describe("backtester", () => {
     ];
     const result = runBacktest(candles, {
       onBar(ctx): Signal {
-        if (ctx.index === 0) return { action: "buy", qty: 1, stopLoss: 50, takeProfit: 500 };
+        if (ctx.index === 0) return { action: "buy", qty: 1, stopLoss: 90, takeProfit: 500 };
         if (ctx.index === 1 && ctx.position) return { action: "close", fill: "this-close", reason: "flat" };
         return { action: "hold" };
       },
@@ -146,7 +146,7 @@ describe("backtester", () => {
       candle(60_000, 100, 100, 100, 100),
     ];
     const result = runBacktest(candles, {
-      onBar: (ctx) => (ctx.index === 0 ? { action: "buy", qty: 100, stopLoss: 99 } : { action: "hold" }),
+      onBar: (ctx) => (ctx.index === 0 ? { action: "buy", qty: 400, stopLoss: 99 } : { action: "hold" }),
     }, { initialEquity: 50_000, principal: 50_000 });
     expect(result.rejectedEntries).toBeGreaterThan(0);
     expect(result.closedTrades).toBe(0);

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readConfig } from "./config";
 import { blankSettings } from "./settings";
+import { HARD_MAX_LEVERAGE } from "./trading/margin";
 import { dubaiDayKey } from "./time";
 import type { Ledger } from "./types";
 
@@ -47,6 +48,11 @@ function readFile(): Ledger {
   }
   const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Ledger;
   if (parsed.version !== 1 || !parsed.account || !parsed.settings) throw new Error("Paper ledger is unreadable.");
+  if (!parsed.settings.marginRev) {
+    parsed.settings.limits.maxLeverage = HARD_MAX_LEVERAGE;
+    parsed.settings.marginRev = 1;
+  }
+  parsed.settings.limits.maxLeverage = Math.min(HARD_MAX_LEVERAGE, Math.max(1, parsed.settings.limits.maxLeverage));
   return parsed;
 }
 

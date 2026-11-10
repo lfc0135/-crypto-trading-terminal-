@@ -1,4 +1,5 @@
 import { DEFAULT_GMGN_RULES, DEFAULT_LIMITS, DEFAULT_TARGETS, DEFAULT_WATCH_RULES, monthlyBandFromDaily } from "./defaults";
+import { HARD_MAX_LEVERAGE } from "./trading/margin";
 import { isEligibleSpot } from "./watchlist/rank";
 import type { GmgnChain, GmgnInterval, Settings } from "./types";
 
@@ -18,9 +19,9 @@ export function normalizeSettings(input: unknown, fallback: Settings = blankSett
   const maxDailyLossPct = num(limits.maxDailyLossPct, 0.005, 0.1);
   const maxDrawdownPct = num(limits.maxDrawdownPct, 0.02, 0.4);
   const perTradeRiskPct = num(limits.perTradeRiskPct, 0.001, 0.05);
-  const maxLeverage = num(limits.maxLeverage, 1, 5);
+  const maxLeverage = num(limits.maxLeverage, 1, HARD_MAX_LEVERAGE);
   if (maxPositionPct == null || maxDailyLossPct == null || maxDrawdownPct == null || perTradeRiskPct == null || maxLeverage == null) {
-    return { error: "Risk limits are outside the allowed range. Position 1–50%, daily loss 0.5–10%, drawdown 2–40%, per-trade 0.1–5%, leverage 1–5." };
+    return { error: `Risk limits are outside the allowed range. Position 1–50%, daily loss 0.5–10%, drawdown 2–40%, per-trade 0.1–5%, leverage 1–${HARD_MAX_LEVERAGE}.` };
   }
   if (perTradeRiskPct > maxDailyLossPct) return { error: "Per-trade risk cannot be larger than the daily loss stop." };
   const targets = raw.targets ?? {};
@@ -91,6 +92,7 @@ export function normalizeSettings(input: unknown, fallback: Settings = blankSett
       },
     },
     leverageReviewMonths: months,
+    marginRev: 1,
   };
 }
 
@@ -100,5 +102,6 @@ export function blankSettings(): Settings {
     targets: { ...DEFAULT_TARGETS },
     watch: { ...DEFAULT_WATCH_RULES, coreInstIds: [...DEFAULT_WATCH_RULES.coreInstIds], gmgn: { ...DEFAULT_GMGN_RULES, chains: [...DEFAULT_GMGN_RULES.chains] } },
     leverageReviewMonths: 3,
+    marginRev: 1,
   };
 }

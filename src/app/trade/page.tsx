@@ -45,7 +45,7 @@ export default function TradePage() {
     takeProfit: takeProfit ? Number(takeProfit) : undefined,
     sizeFromRisk: side === "buy" && sizeFromRisk,
     route: "paper",
-    leverage: 1,
+    leverage: venue === "okx" ? 2 : 1,
     acknowledgeUnsafe,
   };
 
@@ -146,7 +146,7 @@ export default function TradePage() {
           </div>
         </div>
         <p className="mt-4 text-xs leading-5 text-[var(--muted)]">
-          Paper OKX fills use the public bid/ask, 10 bps fee, and 2 bps slippage. Sizes below the OKX minimum are rejected instead of rounded up. On-chain paper fills use the GMGN price plus 30 bps fee and 50 bps slippage. They are not GMGN quotes and they do not move a wallet. Leverage is fixed at 1×.
+          OKX paper buys are isolated margin at 2×: you post half the notional and borrow the rest at the OKX USDT daily rate. Liquidation sits just under a 50% drop. Stops at or below that price are refused. Fees are 10 bps and slippage is 2 bps. Sizes below the OKX minimum are not rounded up. On-chain paper stays at 1×, with 30 bps fee and 50 bps slippage. It is not a GMGN quote.
         </p>
       </div>
       <div className="panel p-4">
