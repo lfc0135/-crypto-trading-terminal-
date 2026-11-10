@@ -25,6 +25,7 @@ export function applyTraderBar(
   spec: Spec,
   borrowDailyRate = DEFAULT_BORROW_DAILY,
   allowLong = true,
+  venue: "okx" | "kraken" = "okx",
 ): { skipped: boolean; decision: TraderDecision | null; message: string } {
   const trader = ensureTrader(ledger);
   const closed = candles.filter((bar) => bar.time > 0);
@@ -59,7 +60,7 @@ export function applyTraderBar(
   }
   if (decision.action === "close" && position) {
     const outcome = placePaperOrder(ledger, {
-      venue: "okx",
+      venue,
       symbol: job.symbol,
       side: "sell",
       type: "market",
@@ -72,7 +73,7 @@ export function applyTraderBar(
   if (decision.action === "buy") {
     const limit = closed[closed.length - 1].close * (1 - 0.0005);
     const outcome = placePaperOrder(ledger, {
-      venue: "okx",
+      venue,
       symbol: job.symbol,
       side: "buy",
       type: "limit",

@@ -92,7 +92,7 @@ Chains in this desk: Solana, BSC, Base.
 
 ## Layout
 
-`src/lib/risk` is the risk engine. `src/lib/backtest` is the backtester. `src/lib/strategies` holds the time-series trend plus the older research strategies. `src/lib/brokers` talks to OKX and GMGN. `src/lib/trading/book.ts` is the paper book. State is a JSON file in `data/` (gitignored), one process.
+`src/lib/risk` is the risk engine. `src/lib/backtest` is the backtester. `src/lib/strategies` holds the time-series trend plus the older research strategies. `src/lib/brokers` talks to OKX, Kraken public futures, and GMGN. `src/lib/trading/book.ts` is the paper book. State is a JSON file in `data/` (gitignored), one process.
 
 ## Run on this computer
 
@@ -105,7 +105,7 @@ chmod +x scripts/run_local.sh scripts/stop_local.sh
 
 That installs dependencies if needed, builds once, and starts the site and the paper auto-trader with `nohup`. Logs and PIDs are `run/server.log`, `run/trader.log`, `run/server.pid`, and `run/trader.pid`. Stop both with `./scripts/stop_local.sh`.
 
-The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score: realized P&L, mark-to-market, fill count, risk-rule breaches, and the on-chain sleeve.
+The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score, plus `kraken` (paper P&L and the BTC/ETH/SOL mark gap versus OKX) and the on-chain sleeve. `PAPER_EXCHANGE` is `okx`, `kraken`, or `both`. Kraken paper uses public futures marks and does not read a key. See `KRAKEN.md`.
 
 The third process is the Solana meme-momentum sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash and trades breakouts on pump.fun graduates, PumpSwap, and Raydium. It does not sign transactions. Wallet scoring is off unless `config.walletGate` is turned on. See `MOMENTUM.md`.
 

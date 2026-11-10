@@ -71,7 +71,7 @@ export interface Candle {
 
 export interface Position {
   id: string;
-  venue: "okx" | "gmgn";
+  venue: "okx" | "gmgn" | "kraken";
   symbol: string;
   qty: number;
   avgPrice: number;
@@ -91,7 +91,7 @@ export interface Position {
 
 export interface WorkingOrder {
   id: string;
-  venue: "okx" | "gmgn";
+  venue: "okx" | "gmgn" | "kraken";
   symbol: string;
   side: "buy" | "sell";
   type: "limit";
@@ -110,7 +110,7 @@ export interface WorkingOrder {
 export interface Fill {
   id: string;
   ts: number;
-  venue: "okx" | "gmgn";
+  venue: "okx" | "gmgn" | "kraken";
   symbol: string;
   side: "buy" | "sell";
   qty: number;

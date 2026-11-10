@@ -17,7 +17,7 @@ interface Outcome {
 }
 
 export default function TradePage() {
-  const [venue, setVenue] = useState<"okx" | "gmgn">("okx");
+  const [venue, setVenue] = useState<"okx" | "gmgn" | "kraken">("okx");
   const [symbol, setSymbol] = useState("BTC-USDT");
   const [chain, setChain] = useState("sol");
   const [address, setAddress] = useState("");
@@ -75,12 +75,13 @@ export default function TradePage() {
         </div>
         <div className="grid gap-3">
           <Field label="Venue">
-            <Select value={venue} onChange={(event) => setVenue(event.target.value as "okx" | "gmgn")}>
+            <Select value={venue} onChange={(event) => setVenue(event.target.value as "okx" | "gmgn" | "kraken")}>
               <option value="okx">OKX spot</option>
+              <option value="kraken">Kraken futures (paper)</option>
               <option value="gmgn">GMGN on-chain (paper price)</option>
             </Select>
           </Field>
-          {venue === "okx" ? (
+          {venue !== "gmgn" ? (
             <Field label="Pair">
               <Input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} />
             </Field>
@@ -146,7 +147,7 @@ export default function TradePage() {
           </div>
         </div>
         <p className="mt-4 text-xs leading-5 text-[var(--muted)]">
-          OKX paper buys are isolated margin at 2×: you post half the notional and borrow the rest at the OKX USDT daily rate. Liquidation sits just under a 50% drop. Stops at or below that price are refused. Fees are 10 bps and slippage is 2 bps. Sizes below the OKX minimum are not rounded up. On-chain paper stays at 1×, with 30 bps fee and 50 bps slippage. It is not a GMGN quote.
+          OKX paper buys are isolated margin at 2×: you post half the notional and borrow the rest at the OKX USDT daily rate. Kraken paper is the same 2× isolated cap on BTC, ETH, and SOL futures marks, with Kraken's 2 bps maker and 5 bps taker schedule instead of OKX's 8 and 10. Live Kraken orders are not sent. On-chain paper stays at 1×.
         </p>
       </div>
       <div className="panel p-4">

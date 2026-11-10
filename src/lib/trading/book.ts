@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { KRAKEN_FUTURES_MAKER_BPS, KRAKEN_FUTURES_TAKER_BPS } from "../brokers/kraken";
 import { ONCHAIN_PAPER_FEE_BPS, ONCHAIN_PAPER_SLIPPAGE_BPS, PAPER_MAKER_FEE_BPS, PAPER_SLIPPAGE_BPS, PAPER_TAKER_FEE_BPS } from "../defaults";
 import { evaluateOrder } from "../risk/engine";
 import { dubaiDayKey } from "../time";
@@ -14,7 +15,7 @@ export interface Quote {
 }
 
 export interface OrderInput {
-  venue: "okx" | "gmgn";
+  venue: "okx" | "gmgn" | "kraken";
   symbol: string;
   side: "buy" | "sell";
   type: "market" | "limit";
@@ -68,11 +69,13 @@ export function reservedCash(ledger: Ledger): number {
   return ledger.account.openOrders.reduce((sum, order) => sum + (order.side === "buy" ? order.reservedCash : 0), 0);
 }
 
-function feeRate(venue: "okx" | "gmgn"): number {
-  return (venue === "gmgn" ? ONCHAIN_PAPER_FEE_BPS : PAPER_TAKER_FEE_BPS) / 10_000;
+function feeRate(venue: "okx" | "gmgn" | "kraken"): number {
+  if (venue === "gmgn") return ONCHAIN_PAPER_FEE_BPS / 10_000;
+  if (venue === "kraken") return KRAKEN_FUTURES_TAKER_BPS / 10_000;
+  return PAPER_TAKER_FEE_BPS / 10_000;
 }
 
-function slipRate(venue: "okx" | "gmgn"): number {
+function slipRate(venue: "okx" | "gmgn" | "kraken"): number {
   return (venue === "gmgn" ? ONCHAIN_PAPER_SLIPPAGE_BPS : PAPER_SLIPPAGE_BPS) / 10_000;
 }
 
@@ -82,7 +85,7 @@ function referencePrice(input: OrderInput, quote: Quote): number {
   return quote.bid > 0 ? quote.bid : quote.last;
 }
 
-function slipped(price: number, side: "buy" | "sell", venue: "okx" | "gmgn"): number {
+function slipped(price: number, side: "buy" | "sell", venue: "okx" | "gmgn" | "kraken"): number {
   const slip = slipRate(venue);
   return side === "buy" ? price * (1 + slip) : price * (1 - slip);
 }
@@ -188,7 +191,7 @@ function closePosition(ledger: Ledger, position: Position, price: number, orderT
 }
 
 function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
-  const makerBuy = order.side === "buy" && order.venue === "okx";
+  const makerBuy = order.side === "buy" && (order.venue === "okx" || order.venue === "kraken");
   const price = makerBuy ? rawPrice : slipped(rawPrice, order.side, order.venue);
   ledger.account.openOrders = ledger.account.openOrders.filter((item) => item.id !== order.id);
   if (order.side === "buy") {
@@ -204,7 +207,7 @@ function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
       address: order.address,
       leverage: order.leverage,
       borrowDailyRate: order.borrowDailyRate,
-      feeRate: makerBuy ? PAPER_MAKER_FEE_BPS / 10_000 : undefined,
+      feeRate: makerBuy ? (order.venue === "kraken" ? KRAKEN_FUTURES_MAKER_BPS : PAPER_MAKER_FEE_BPS) / 10_000 : undefined,
       note: "Paper limit buy filled.",
     });
   } else {
@@ -233,7 +236,7 @@ function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
 }
 
 function openLong(ledger: Ledger, input: {
-  venue: "okx" | "gmgn";
+  venue: "okx" | "gmgn" | "kraken";
   symbol: string;
   qty: number;
   price: number;

@@ -29,6 +29,15 @@ interface Dash {
   positions: { id: string; symbol: string; qty: number; avgPrice: number; mark: number; unrealized: number; positionPct: number; stopLoss: number | null; takeProfit: number | null; stale: boolean }[];
   recentFills: { id: string; symbol: string; side: string; qty: number; price: number; realizedPnl: number; note: string }[];
   equityCurve: { ts: number; equity: number }[];
+  kraken?: {
+    exchange: string;
+    realizedPnl: number;
+    mtmPnl: number;
+    trades: number;
+    openPositions: number;
+    fees: { krakenMakerBps: number; krakenTakerBps: number; okxMakerBps: number; okxTakerBps: number };
+    quotes: { symbol: string; okx: number | null; kraken: number | null; diffBps: number | null }[];
+  };
 }
 
 const outcomeCopy = {
@@ -83,6 +92,28 @@ export default function DashboardPage() {
         </div>
         <Link href="/trade" className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-ink)]">New paper order</Link>
       </div>
+
+      {data.kraken && (
+        <section className="panel p-4">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-medium">Kraken paper</h2>
+            <Badge tone="accent">{data.kraken.exchange}</Badge>
+            <span className="text-xs text-[var(--muted)]">Futures marks, 2× isolated cap. Maker {data.kraken.fees.krakenMakerBps} bps / taker {data.kraken.fees.krakenTakerBps} bps. OKX spot is {data.kraken.fees.okxMakerBps} / {data.kraken.fees.okxTakerBps}.</span>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <Stat label="Kraken realized today" value={usd(data.kraken.realizedPnl)} detail={`${data.kraken.trades} fills`} tone={data.kraken.realizedPnl} />
+            <Stat label="Kraken open P&L" value={usd(data.kraken.mtmPnl)} detail={`${data.kraken.openPositions} positions`} tone={data.kraken.mtmPnl} />
+            <div className="text-sm leading-6 text-[var(--muted)]">
+              {data.kraken.quotes.map((row) => (
+                <div key={row.symbol}>
+                  {row.symbol.replace("-USDT", "")}: Kraken {row.kraken == null ? "—" : row.kraken.toLocaleString("en-US", { maximumFractionDigits: 2 })} vs OKX {row.okx == null ? "—" : row.okx.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                  {row.diffBps == null ? "" : ` (${row.diffBps > 0 ? "+" : ""}${row.diffBps.toFixed(1)} bps)`}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="grid gap-3 md:grid-cols-4">
         <Stat label="Equity" value={usd(data.equity)} detail={`${usd(data.cash)} cash`} />

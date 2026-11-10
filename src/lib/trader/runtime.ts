@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getKrakenCandles, getKrakenQuote, isKrakenMajor, paperExchange } from "../brokers/kraken";
 import { getCandles, getInstrument, getUsdtBorrowDailyRate } from "../brokers/okx";
 import { updateLedger } from "../store";
 import { buildRegime, regimeAllows } from "../tuning/regime";
@@ -47,12 +48,18 @@ export async function traderTick(): Promise<{ ran: boolean; messages: string[] }
     }
     for (const job of trader.assignments) {
       try {
-        const candles = await getCandles(job.symbol, job.bar, 400, false);
-        const spec = await getInstrument(job.symbol);
+        const useKraken = paperExchange() === "kraken" && isKrakenMajor(job.symbol);
+        const candles = useKraken ? await getKrakenCandles(job.symbol, job.bar, 400) : await getCandles(job.symbol, job.bar, 400, false);
+        const spec = useKraken
+          ? { minSz: job.symbol === "BTC-USDT" ? 0.0001 : job.symbol === "ETH-USDT" ? 0.001 : 0.01, lotSz: 0.0001 }
+          : await getInstrument(job.symbol).then((row) => ({ minSz: row.minSz, lotSz: row.lotSz }));
+        const krakenQuote = useKraken ? await getKrakenQuote(job.symbol) : null;
         const last = candles[candles.length - 1];
-        const quote = last ? { bid: last.close, ask: last.close, last: last.close } : { bid: 0, ask: 0, last: 0 };
+        const quote = krakenQuote
+          ? { bid: krakenQuote.bid, ask: krakenQuote.ask, last: krakenQuote.mark }
+          : last ? { bid: last.close, ask: last.close, last: last.close } : { bid: 0, ask: 0, last: 0 };
         const allowLong = regime.length > 0 && last != null && regimeAllows(regime, last.time);
-        const result = applyTraderBar(ledger, job, candles, quote, { minSz: spec.minSz, lotSz: spec.lotSz }, rate, allowLong);
+        const result = applyTraderBar(ledger, job, candles, quote, spec, krakenQuote?.fundingDaily ?? rate, allowLong, useKraken ? "kraken" : "okx");
         messages.push(`${job.symbol}: ${result.message}`);
         trader.lastError = null;
       } catch (error) {

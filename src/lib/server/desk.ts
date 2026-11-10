@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { okxKeysPresent, publicMode, readConfig } from "../config";
 import { DEMO_PHRASE, LIVE_PHRASE, resolvedMonthly } from "../defaults";
 import { GMGN_USDC, gmgnRank, gmgnSecurity, gmgnSwap, gmgnToken, priceFromTokenInfo } from "../brokers/gmgn";
+import { compareMajors, getKrakenQuote, isKrakenMajor, krakenPaperScore, paperExchange } from "../brokers/kraken";
 import { getCandles, getInstrument, getOrderBook, getSpotTickers, getUsdtBorrowDailyRate, okxPlaceSpotOrder } from "../brokers/okx";
 import { runBacktest } from "../backtest/engine";
 import { normalizeSettings } from "../settings";
@@ -172,16 +173,28 @@ async function tick(ledger: Ledger) {
     tickers = [];
   }
   const map = new Map(tickers.map((row) => [row.instId, row.last]));
+  const okxLast: Record<string, number> = {};
+  for (const row of tickers) okxLast[row.instId] = row.last;
+  const quotes = await compareMajors(okxLast).catch(() => []);
   const marks = positionMarks(ledger, map);
+  for (const quote of quotes) {
+    if (!(quote.kraken != null)) continue;
+    for (const position of ledger.account.positions) {
+      if (position.venue === "kraken" && position.symbol === quote.symbol) marks[position.symbol] = quote.kraken;
+    }
+    for (const order of ledger.account.openOrders) {
+      if (order.venue === "kraken" && order.symbol === quote.symbol) marks[order.symbol] = quote.kraken;
+    }
+  }
   await hydrateGmgnMarks(ledger, marks);
   markBook(ledger, marks);
-  return { tickers, marks };
+  return { tickers, marks, quotes };
 }
 
 export async function loadDashboard() {
   return updateLedger(async (ledger) => {
-    const { marks } = await tick(ledger);
-    return snapshot(ledger, marks);
+    const { marks, quotes } = await tick(ledger);
+    return { ...snapshot(ledger, marks), kraken: { exchange: paperExchange(), ...krakenPaperScore(ledger, marks), quotes } };
   });
 }
 
@@ -318,7 +331,7 @@ function gateExchange(route: string, phrase: string | undefined, ledger: Ledger)
 
 export async function submitOrder(raw: Record<string, unknown>, commit: boolean) {
   const route = typeof raw.route === "string" ? raw.route : "paper";
-  const venue = raw.venue === "gmgn" ? "gmgn" : "okx";
+  const venue = raw.venue === "gmgn" ? "gmgn" : raw.venue === "kraken" ? "kraken" : "okx";
   const side = raw.side === "sell" ? "sell" : "buy";
   const type = raw.type === "limit" ? "limit" : "market";
   return updateLedger(async (ledger) => {
@@ -339,6 +352,16 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
       }
       chain = chainRaw;
       symbol = `${chain}:${address}`;
+    } else if (venue === "kraken") {
+      if (route !== "paper") {
+        return { ok: false as const, message: "Kraken live orders are not implemented. This adapter is public data plus the local paper book.", reasons: ["Kraken stays paper."] };
+      }
+      if (paperExchange() === "okx") {
+        return { ok: false as const, message: "PAPER_EXCHANGE is okx. Set it to kraken or both before a Kraken paper order.", reasons: ["Kraken paper is off."] };
+      }
+      if (!isKrakenMajor(symbol)) {
+        return { ok: false as const, message: "Kraken paper is BTC-USDT, ETH-USDT, and SOL-USDT only.", reasons: ["Not a mapped major."] };
+      }
     } else if (!isEligibleSpot(symbol)) {
       return { ok: false as const, message: "Orders are USDT spot only. Perps and leveraged tokens are not routed.", reasons: ["Not a USDT spot pair."] };
     }
@@ -418,6 +441,11 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
         const inst = await instrument(symbol);
         if (inst.state !== "live") return { ok: false as const, message: `${symbol} is not live on OKX.`, reasons: ["Instrument halted."] };
         spec = { minSz: inst.minSz, lotSz: inst.lotSz };
+      } else if (venue === "kraken") {
+        const row = await getKrakenQuote(symbol);
+        quote = { bid: row.bid, ask: row.ask, last: row.mark };
+        spec = { minSz: symbol === "BTC-USDT" ? 0.0001 : symbol === "ETH-USDT" ? 0.001 : 0.01, lotSz: 0.0001 };
+        input.leverage = Math.min(HARD_MAX_LEVERAGE, input.leverage ?? HARD_MAX_LEVERAGE);
       } else {
         quote = await quoteGmgn(chain!, address!);
       }
@@ -425,7 +453,9 @@ export async function submitOrder(raw: Record<string, unknown>, commit: boolean)
       const message = error instanceof Error ? error.message : "Could not price the order.";
       return { ok: false as const, message, reasons: [message] };
     }
-    const borrowDailyRate = venue === "okx" && (input.leverage ?? 1) > 1 ? await getUsdtBorrowDailyRate() : undefined;
+    const borrowDailyRate = venue === "kraken"
+      ? (await getKrakenQuote(symbol)).fundingDaily
+      : venue === "okx" && (input.leverage ?? 1) > 1 ? await getUsdtBorrowDailyRate() : undefined;
     const outcome = commit
       ? placePaperOrder(ledger, input, quote, spec, borrowDailyRate)
       : previewPaperOrder(ledger, input, quote, spec, borrowDailyRate);

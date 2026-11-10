@@ -9,6 +9,8 @@ export interface AppConfig {
   principal: number;
   okx: { apiKey: string; secret: string; passphrase: string; baseUrl: string };
   gmgn: { apiKey: string; privateKey: string; host: string; wallet: string };
+  /** Which paper book the majors use. Live routing is unchanged. */
+  paperExchange: "okx" | "kraken" | "both";
 }
 
 function clean(value: string | undefined): string {
@@ -34,6 +36,7 @@ export function readConfig(): AppConfig {
       host: clean(process.env.GMGN_HOST) || "https://openapi.gmgn.ai",
       wallet: clean(process.env.GMGN_WALLET_ADDRESS),
     },
+    paperExchange: process.env.PAPER_EXCHANGE === "kraken" || process.env.PAPER_EXCHANGE === "both" ? process.env.PAPER_EXCHANGE : "okx",
   };
 }
 
@@ -53,5 +56,6 @@ export function publicMode(cfg = readConfig(), liveConfirmedAt: string | null = 
     liveConfirmed: Boolean(liveConfirmedAt),
     spotOnly: true as const,
     principal: cfg.principal,
+    paperExchange: cfg.paperExchange,
   };
 }
