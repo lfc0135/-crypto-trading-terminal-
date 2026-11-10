@@ -92,18 +92,24 @@ Chains in this desk: Solana, BSC, Base.
 
 ## Layout
 
-`src/lib/risk` is the risk engine. `src/lib/backtest` is the backtester. `src/lib/strategies` holds the four strategies. `src/lib/brokers` talks to OKX and GMGN. `src/lib/trading/book.ts` is the paper book. State is a JSON file in `data/` (gitignored), one process.
+`src/lib/risk` is the risk engine. `src/lib/backtest` is the backtester. `src/lib/strategies` holds the time-series trend plus the older research strategies. `src/lib/brokers` talks to OKX and GMGN. `src/lib/trading/book.ts` is the paper book. State is a JSON file in `data/` (gitignored), one process.
 
-## Run 24/7
+## Run on this computer
 
-The paper auto-trader is a loop in the same Node process as `next start` (`src/instrumentation.ts`). It reads `data/ledger.json`. Keep that directory on a persistent disk.
+No Docker and no systemd. From the repo root:
 
 ```bash
-npm run build
-npm start
+chmod +x scripts/run_local.sh scripts/stop_local.sh
+./scripts/run_local.sh
 ```
 
-Or, in a second process, `npm run trader`. A lock file stops two loops from sending the same paper order. The loop does nothing until you press Start on the Auto page, and it never calls the live OKX or GMGN order routes.
+That installs dependencies if needed, builds once, and starts the site and the paper auto-trader with `nohup`. Logs and PIDs are `run/server.log`, `run/trader.log`, `run/server.pid`, and `run/trader.pid`. Stop both with `./scripts/stop_local.sh`.
+
+The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score: realized P&L, mark-to-market, fill count, and risk-rule breaches.
+
+The trader process never turns on live trading. It logs a signal for every saved config. It sends a paper order only when that config was armed by the walk-forward test and you have pressed Start on the Auto page.
+
+`npm start` still runs the site with the loop inside the same process. The local script sets `TRADER_EMBEDDED=0` on the site and `TRADER_STANDALONE=1` on the trader process, so only one loop trades. A lock file is the second guard.
 
 Docker, with the ledger on a volume:
 
@@ -125,4 +131,4 @@ On a small VPS, Fly.io, or Railway, mount a volume at `/app/data` and run the sa
 - Paper stops fill from the last polled mark. A gap between polls is only as good as the next price.
 - Backtest Sharpe uses bar-close returns and a 0% risk-free rate. Under 30 Dubai days it is labeled unstable.
 - The JSON ledger is meant for one trading loop. A lock file keeps a second loop from double-filling, but two web servers writing the same file can still race.
-- Funding, borrow, and withdrawal are out of scope. The OKX key instructions omit withdrawal on purpose.
+- Withdrawal is out of scope. The OKX key instructions omit withdrawal on purpose. Paper longs at 2× accrue a frozen USDT borrow rate (the public OKX basic rate when the live loop can read it). Perp funding is not modeled.

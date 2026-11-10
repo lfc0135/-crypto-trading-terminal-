@@ -43,9 +43,17 @@ export interface WalkForwardInput {
   minTrainTrades?: number;
   minTestTrades?: number;
   initialEquity?: number;
+  entryStyle?: "taker" | "maker";
+  wrap?: (strategy: StrategyInstance) => StrategyInstance;
 }
 
-const baseConfig = (barMs: number, limits: RiskLimits, equity: number, signalFromIndex?: number): Partial<BacktestConfig> => ({
+const baseConfig = (
+  barMs: number,
+  limits: RiskLimits,
+  equity: number,
+  signalFromIndex?: number,
+  entryStyle?: "taker" | "maker",
+): Partial<BacktestConfig> => ({
   initialEquity: equity,
   principal: equity,
   feeBps: 10,
@@ -53,6 +61,10 @@ const baseConfig = (barMs: number, limits: RiskLimits, equity: number, signalFro
   limits,
   barDurationMs: barMs,
   signalFromIndex,
+  entryStyle,
+  makerFeeBps: 8,
+  minRewardToCost: 3,
+  makerExpireBars: 2,
 });
 
 export function scoreBacktest(result: ReturnType<typeof runBacktest>): SweepMetrics {
@@ -76,11 +88,18 @@ function betterTrain(a: SweepMetrics, b: SweepMetrics): boolean {
   return a.hitRate > b.hitRate;
 }
 
-function instance(strategyId: string, params: Record<string, number>, filters: FilterFlags, barMs: number): StrategyInstance | null {
+function instance(
+  strategyId: string,
+  params: Record<string, number>,
+  filters: FilterFlags,
+  barMs: number,
+  wrap?: (strategy: StrategyInstance) => StrategyInstance,
+): StrategyInstance | null {
   const strategy = getStrategy(strategyId);
   if (!strategy) return null;
   const atrMult = params.atrMult ?? 2;
-  return applyFilters(strategy.create(params), filters, barMs, atrMult);
+  const built = applyFilters(strategy.create(params), filters, barMs, atrMult);
+  return wrap ? wrap(built) : built;
 }
 
 /** A point is fragile when it towers over the rest of the same grid and the runner-up is far behind. */
@@ -104,9 +123,9 @@ export function walkForward(input: WalkForwardInput): ScoredCandidate[] {
   const trainExpectancy: number[] = [];
 
   for (const point of input.grid) {
-    const strategy = instance(input.strategyId, point.params, point.filters, input.barMs);
+    const strategy = instance(input.strategyId, point.params, point.filters, input.barMs, input.wrap);
     if (!strategy) continue;
-    const trainRun = runBacktest(trainCandles, strategy, baseConfig(input.barMs, limits, equity));
+    const trainRun = runBacktest(trainCandles, strategy, baseConfig(input.barMs, limits, equity, undefined, input.entryStyle));
     const train = scoreBacktest(trainRun);
     trainExpectancy.push(train.expectancy);
     scored.push({
@@ -135,9 +154,9 @@ export function walkForward(input: WalkForwardInput): ScoredCandidate[] {
   if (survivors.length === 0) return scored;
   const chosen = survivors.reduce((a, b) => (betterTrain(a.train, b.train) ? a : b));
 
-  const testStrategy = instance(input.strategyId, chosen.params, chosen.filters, input.barMs);
+  const testStrategy = instance(input.strategyId, chosen.params, chosen.filters, input.barMs, input.wrap);
   if (!testStrategy) return scored;
-  const testRun = runBacktest(input.candles, testStrategy, baseConfig(input.barMs, limits, equity, cut));
+  const testRun = runBacktest(input.candles, testStrategy, baseConfig(input.barMs, limits, equity, cut, input.entryStyle));
   const testTrades = testRun.trades.filter((trade) => trade.entryTime >= input.candles[cut].time);
   const testPnL = testTrades.reduce((sum, trade) => sum + trade.pnl, 0);
   const after = testRun.equityCurve.filter((point) => point.time >= input.candles[cut].time);

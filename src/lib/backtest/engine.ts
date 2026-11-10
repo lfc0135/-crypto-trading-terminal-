@@ -54,6 +54,11 @@ export interface BacktestConfig {
   borrowDailyRate: number;
   /** Ignore entry and exit signals before this bar. History is still visible so indicators can warm up. */
   signalFromIndex?: number;
+  /** Maker rests a limit at the signal close. Taker buys the next open. */
+  entryStyle?: "taker" | "maker";
+  makerFeeBps?: number;
+  minRewardToCost?: number;
+  makerExpireBars?: number;
   targets: { dailyLow: number; dailyHigh: number };
 }
 
@@ -95,11 +100,13 @@ export interface BacktestResult {
 }
 
 interface Pending {
-  kind: "buy" | "close";
+  kind: "buy" | "close" | "maker-buy";
   qty: number;
   stopLoss: number | null;
   takeProfit: number | null;
   reason: string;
+  limitPrice?: number;
+  placedIndex?: number;
 }
 
 const DEFAULTS: BacktestConfig = {
@@ -258,6 +265,63 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
     } else if (pending?.kind === "close" && qty > 0) {
       closeAt(bar.open, bar.time, pending.reason);
       pending = null;
+    } else if (pending?.kind === "maker-buy" && qty === 0 && pending.limitPrice != null) {
+      const age = i - (pending.placedIndex ?? i);
+      const limit = pending.limitPrice;
+      if (age > (cfg.makerExpireBars ?? 2)) {
+        reject("maker limit expired without a fill");
+        pending = null;
+      } else if (bar.open <= limit) {
+        reject("maker bid was gapped through and was not filled");
+        pending = null;
+      } else if (bar.low <= limit) {
+        const fill = limit;
+        const feeBps = cfg.makerFeeBps ?? 8;
+        const fee = feeOf(fill * pending.qty, feeBps);
+        const decision = evaluateOrder({
+          equity: cash,
+          peakEquity: peak,
+          dayStartEquity: dayStart,
+          limits: cfg.limits,
+          dailyKillLatched: false,
+          drawdownKillLatched: false,
+          order: {
+            side: "buy",
+            qty: pending.qty,
+            price: fill,
+            leverage,
+            stopLoss: pending.stopLoss,
+            currentQty: 0,
+            feeBps,
+          },
+        });
+        const parts = marginAndBorrow(fill * pending.qty, leverage);
+        if (!decision.allowed || parts.margin + fee > cash) {
+          reject(decision.allowed ? "not enough cash for margin" : decision.reasons[0] ?? "rejected at the maker fill");
+        } else if (leverage > 1) {
+          cash -= parts.margin + fee;
+          qty = pending.qty;
+          avg = fill + fee / pending.qty;
+          borrowed = parts.borrowed;
+          liq = liquidationPrice(fill, leverage);
+          stop = pending.stopLoss;
+          take = pending.takeProfit;
+          entryTime = bar.time;
+          entryPrice = fill;
+          feesPaid += fee;
+        } else {
+          const bought = applyBuy({ cash, qty, avgPrice: avg }, fill, pending.qty, fee);
+          cash = bought.cash;
+          qty = bought.qty;
+          avg = bought.avgPrice;
+          stop = pending.stopLoss;
+          take = pending.takeProfit;
+          entryTime = bar.time;
+          entryPrice = fill;
+          feesPaid += fee;
+        }
+        pending = null;
+      }
     }
 
     if (qty > 0 && liq != null && bar.open <= liq) {
@@ -343,7 +407,25 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
           },
         });
         if (!decision.allowed) reject(decision.reasons[0] ?? "risk engine rejected the entry");
-        else {
+        else if ((cfg.entryStyle ?? "taker") === "maker") {
+          const limit = bar.close;
+          const target = signal.takeProfit ?? (stopLoss != null ? limit + (limit - stopLoss) * 2 : 0);
+          const multiple = cfg.minRewardToCost ?? 3;
+          const cost = ((cfg.makerFeeBps ?? 8) + cfg.feeBps + cfg.slippageBps) / 10_000;
+          if (!(target > limit) || (target - limit) / limit < multiple * cost) {
+            reject("expected move is under 3x the maker-entry plus taker-stop cost");
+          } else {
+            pending = {
+              kind: "maker-buy",
+              qty: orderQty,
+              stopLoss,
+              takeProfit: signal.takeProfit ?? target,
+              reason: signal.reason ?? "maker entry",
+              limitPrice: limit,
+              placedIndex: i,
+            };
+          }
+        } else {
           pending = {
             kind: "buy",
             qty: orderQty,

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getCandles, getInstrument, getUsdtBorrowDailyRate } from "../brokers/okx";
 import { updateLedger } from "../store";
+import { buildRegime, regimeAllows } from "../tuning/regime";
 import { ensureTrader } from "./step";
 import { applyTraderBar } from "./step";
 
@@ -27,13 +28,8 @@ export async function traderTick(): Promise<{ ran: boolean; messages: string[] }
   await updateLedger(async (ledger) => {
     const trader = ensureTrader(ledger);
     trader.lastTickAt = Date.now();
-    if (!trader.enabled) {
-      messages.push("stopped");
-      return;
-    }
-    const armed = trader.assignments.filter((job) => job.armed);
-    if (armed.length === 0) {
-      messages.push("no armed configs");
+    if (trader.assignments.length === 0) {
+      messages.push("no assignments");
       trader.lastError = null;
       return;
     }
@@ -43,13 +39,20 @@ export async function traderTick(): Promise<{ ran: boolean; messages: string[] }
     } catch {
       /* frozen fallback inside the order path */
     }
-    for (const job of armed) {
+    let regime: ReturnType<typeof buildRegime> = [];
+    try {
+      regime = buildRegime(await getCandles("BTC-USDT", "1D", 400, false));
+    } catch {
+      messages.push("BTC regime unavailable; new longs are blocked");
+    }
+    for (const job of trader.assignments) {
       try {
         const candles = await getCandles(job.symbol, job.bar, 400, false);
         const spec = await getInstrument(job.symbol);
         const last = candles[candles.length - 1];
         const quote = last ? { bid: last.close, ask: last.close, last: last.close } : { bid: 0, ask: 0, last: 0 };
-        const result = applyTraderBar(ledger, job, candles, quote, { minSz: spec.minSz, lotSz: spec.lotSz }, rate);
+        const allowLong = regime.length > 0 && last != null && regimeAllows(regime, last.time);
+        const result = applyTraderBar(ledger, job, candles, quote, { minSz: spec.minSz, lotSz: spec.lotSz }, rate, allowLong);
         messages.push(`${job.symbol}: ${result.message}`);
         trader.lastError = null;
       } catch (error) {
@@ -63,7 +66,8 @@ export async function traderTick(): Promise<{ ran: boolean; messages: string[] }
 }
 
 export function startEmbeddedTrader(): void {
-  if (timer || process.env.TRADER_EMBEDDED === "0") return;
+  if (timer) return;
+  if (process.env.TRADER_EMBEDDED === "0" && process.env.TRADER_STANDALONE !== "1") return;
   timer = setInterval(() => {
     if (ticking) return;
     ticking = true;
@@ -71,5 +75,5 @@ export function startEmbeddedTrader(): void {
       ticking = false;
     });
   }, 30_000);
-  timer.unref?.();
+  if (process.env.TRADER_STANDALONE !== "1") timer.unref?.();
 }

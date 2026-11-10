@@ -96,6 +96,55 @@ export async function getCandles(instId: string, bar: string, limit: number, inc
   return candles.slice(-limit);
 }
 
+/** Pages backward until `startMs`. Used for multi-year walk-forward samples. */
+async function okxGetPaged<T>(path: string): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await okxGet<T>(path);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("OKX request failed");
+      await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    }
+  }
+  throw lastError ?? new Error("OKX request failed");
+}
+
+export async function getCandlesSince(instId: string, bar: string, startMs: number): Promise<Candle[]> {
+  const rows: string[][] = [];
+  let after: string | undefined;
+  while (rows.length < 20_000) {
+    const query = new URLSearchParams({ instId, bar, limit: "100" });
+    if (after) query.set("after", after);
+    const path = rows.length === 0 ? `/api/v5/market/candles?${query}` : `/api/v5/market/history-candles?${query}`;
+    const data = await okxGetPaged<string[][]>(path);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    if (!data.length) break;
+    rows.push(...data);
+    const oldest = data[data.length - 1]?.[0];
+    if (!oldest || oldest === after) break;
+    after = oldest;
+    if (Number(oldest) <= startMs || data.length < 100) break;
+  }
+  const candles: Candle[] = [];
+  const seen = new Set<number>();
+  for (const row of rows) {
+    const time = Number(row[0]);
+    if (seen.has(time) || row[8] === "0" || time < startMs) continue;
+    seen.add(time);
+    candles.push({
+      time,
+      open: Number(row[1]),
+      high: Number(row[2]),
+      low: Number(row[3]),
+      close: Number(row[4]),
+      volume: Number(row[5]),
+    });
+  }
+  candles.sort((a, b) => a.time - b.time);
+  return candles;
+}
+
 export interface BookLevel {
   price: number;
   size: number;

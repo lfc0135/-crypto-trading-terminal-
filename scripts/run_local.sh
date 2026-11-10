@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Persistent paper desk on a plain Linux box. No Docker and no systemd.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p run
+
+if [[ ! -d node_modules ]]; then
+  npm install
+fi
+if [[ ! -f .next/BUILD_ID ]]; then
+  npm run build
+fi
+
+start_one() {
+  local name="$1"
+  local pidfile="run/${name}.pid"
+  shift
+  if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    echo "$name already running (pid $(cat "$pidfile"))"
+    return
+  fi
+  TRADER_EMBEDDED=0 setsid nohup "$@" > "run/${name}.log" 2>&1 &
+  echo $! > "$pidfile"
+  echo "$name started (pid $(cat "$pidfile"), log run/${name}.log)"
+}
+
+start_one server npx next start -p 43123 -H 0.0.0.0
+TRADER_STANDALONE=1 start_one trader npx tsx src/trader/main.ts
+echo "Desk: http://127.0.0.1:43123"
+echo "Day score: curl -s http://127.0.0.1:43123/api/summary"

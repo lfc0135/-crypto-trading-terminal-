@@ -210,7 +210,66 @@ function createIntraday(params: Record<string, number>): StrategyInstance {
   };
 }
 
+const trendParams: ParamSpec[] = [
+  { key: "lookback", label: "Breakout lookback", min: 10, max: 120, step: 1, default: 55 },
+  { key: "atrPeriod", label: "ATR period", min: 5, max: 40, step: 1, default: 14 },
+  { key: "atrMult", label: "ATR stop multiple", min: 1, max: 6, step: 0.1, default: 3 },
+  { key: "rewardRisk", label: "Target / risk", min: 1, max: 6, step: 0.1, default: 3 },
+];
+
+function createTrend(params: Record<string, number>): StrategyInstance {
+  const p = pack(params, trendParams);
+  const closes: number[] = [];
+  let fast: number | null = null;
+  let slow: number | null = null;
+  const kFast = 2 / 21;
+  const kSlow = 2 / 51;
+  return {
+    onBar(ctx: BarContext): Signal {
+      const i = ctx.history.length - 1;
+      if (ctx.index === 0) {
+        closes.length = 0;
+        fast = null;
+        slow = null;
+      }
+      if (closes.length === i) {
+        closes.push(ctx.bar.close);
+        if (closes.length === 20) fast = closes.reduce((sum, value) => sum + value, 0) / 20;
+        else if (fast != null) fast = ctx.bar.close * kFast + fast * (1 - kFast);
+        if (closes.length === 50) slow = closes.reduce((sum, value) => sum + value, 0) / 50;
+        else if (slow != null) slow = ctx.bar.close * kSlow + slow * (1 - kSlow);
+      }
+      if (i < p.lookback || i < p.atrPeriod) return hold();
+      const priorHigh = highestHigh(ctx.history, i - p.lookback, i - 1);
+      const atr = atrAt(ctx.history, i, p.atrPeriod);
+      if (priorHigh == null || atr == null || atr <= 0) return hold();
+      if (ctx.position && fast != null && slow != null && fast < slow) {
+        return { action: "close", reason: "trend lost: 20 EMA crossed under 50 EMA" };
+      }
+      if (!ctx.position && ctx.bar.close > priorHigh && fast != null && slow != null && fast > slow) {
+        const stop = ctx.bar.close - p.atrMult * atr;
+        if (!(stop < ctx.bar.close)) return hold();
+        return {
+          action: "buy",
+          stopLoss: stop,
+          takeProfit: ctx.bar.close + p.rewardRisk * (ctx.bar.close - stop),
+          reason: "close broke the prior high with the 20/50 EMA still up",
+        };
+      }
+      return hold();
+    },
+  };
+}
+
 export const STRATEGIES: StrategyDefinition[] = [
+  {
+    id: "ts-trend",
+    name: "Time-series trend",
+    description: "4H and daily. Buys a break of the prior N-bar high only while the 20 EMA is above the 50 EMA. Stop is an ATR multiple and the target is a multiple of that risk. Holds for multiple bars. Intended to run only when BTC is above its 200-day average.",
+    timeframes: ["4H", "1D"],
+    params: trendParams,
+    create: createTrend,
+  },
   {
     id: "ema-momentum",
     name: "EMA momentum",

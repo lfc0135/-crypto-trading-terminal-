@@ -27,9 +27,25 @@ export const DEFAULT_TARGETS: TargetSettings = {
 
 export const LEVERAGE_REVIEW_MONTHS = 3;
 
-/** OKX spot VIP0 taker is 10 bps. Paper uses that, plus 2 bps of slippage. */
+/** OKX spot VIP0: maker 8 bps, taker 10 bps. Slippage applies to taker stops only. */
+export const PAPER_MAKER_FEE_BPS = 8;
 export const PAPER_TAKER_FEE_BPS = 10;
 export const PAPER_SLIPPAGE_BPS = 2;
+/** Skip a trade unless the planned move is at least this many times the round-trip cost. */
+export const MIN_REWARD_TO_COST = 3;
+
+export function roundTripCostFraction(
+  makerBps = PAPER_MAKER_FEE_BPS,
+  takerBps = PAPER_TAKER_FEE_BPS,
+  slippageBps = PAPER_SLIPPAGE_BPS,
+): number {
+  return (makerBps + takerBps + slippageBps) / 10_000;
+}
+
+export function expectedMoveCoversCost(entry: number, target: number, multiple = MIN_REWARD_TO_COST): boolean {
+  if (!(entry > 0) || !(target > entry)) return false;
+  return (target - entry) / entry >= multiple * roundTripCostFraction();
+}
 
 /** On-chain paper model. Not a GMGN quote. */
 export const ONCHAIN_PAPER_FEE_BPS = 30;

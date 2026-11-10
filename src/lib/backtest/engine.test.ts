@@ -151,4 +151,42 @@ describe("backtester", () => {
     expect(result.rejectedEntries).toBeGreaterThan(0);
     expect(result.closedTrades).toBe(0);
   });
+
+  it("skips a maker entry whose target is under 3x the round-trip cost", () => {
+    const candles = [
+      candle(0, 100, 100, 100, 100),
+      candle(60_000, 100.1, 100.2, 99.9, 100),
+    ];
+    const result = runBacktest(candles, {
+      onBar: (ctx) => (ctx.index === 0 ? { action: "buy", qty: 1, stopLoss: 99.8, takeProfit: 100.2 } : { action: "hold" }),
+    }, {
+      entryStyle: "maker",
+      limits: { ...DEFAULT_LIMITS, perTradeRiskPct: 1, maxPositionPct: 1, maxDailyLossPct: 1, maxDrawdownPct: 1 },
+    });
+    expect(result.rejectNotes.some((note) => note.includes("3x"))).toBe(true);
+    expect(result.closedTrades).toBe(0);
+  });
+
+  it("cancels a maker bid that gaps through the open and fills one that trades down to the limit", () => {
+    const wide = { ...DEFAULT_LIMITS, perTradeRiskPct: 1, maxPositionPct: 1, maxDailyLossPct: 1, maxDrawdownPct: 1 };
+    const gapped = runBacktest([
+      candle(0, 100, 100, 100, 100),
+      candle(60_000, 99, 99, 98, 98.5),
+    ], {
+      onBar: (ctx) => (ctx.index === 0 ? { action: "buy", qty: 1, stopLoss: 80, takeProfit: 130 } : { action: "hold" }),
+    }, { entryStyle: "maker", feeBps: 10, slippageBps: 2, makerFeeBps: 8, limits: wide });
+    expect(gapped.rejectNotes.some((note) => note.includes("gapped"))).toBe(true);
+    expect(gapped.closedTrades).toBe(0);
+
+    const filled = runBacktest([
+      candle(0, 100, 100, 100, 100),
+      candle(60_000, 101, 102, 100, 101),
+      candle(120_000, 101, 101, 70, 70),
+    ], {
+      onBar: (ctx) => (ctx.index === 0 ? { action: "buy", qty: 1, stopLoss: 80, takeProfit: 130 } : { action: "hold" }),
+    }, { entryStyle: "maker", feeBps: 10, slippageBps: 2, makerFeeBps: 8, limits: wide });
+    expect(filled.trades).toHaveLength(1);
+    expect(filled.trades[0].entryPrice).toBe(100);
+    expect(filled.trades[0].exitPrice).toBeLessThan(80);
+  });
 });

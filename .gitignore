@@ -34,8 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
-# local paper ledger
+# local paper ledger, candle cache, and box-mode processes
 /data
+/run
 
 # local API probes
 /agent-tools

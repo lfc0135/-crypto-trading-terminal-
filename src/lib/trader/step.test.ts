@@ -61,6 +61,26 @@ describe("paper auto-trader", () => {
     expect(ledger.account.positions).toHaveLength(0);
   });
 
+  it("logs an unarmed signal and does not place an order", () => {
+    const ledger = freshLedger(Date.UTC(2026, 8, 1));
+    ledger.trader = { enabled: true, assignments: [], lastBar: {}, lastTickAt: null, lastError: null };
+    const candles = rise(40, 100);
+    const result = applyTraderBar(ledger, {
+      symbol: "BTC-USDT",
+      strategyId: "ema-momentum",
+      bar: "1H",
+      params: { fast: 3, slow: 8, atrPeriod: 5, atrMult: 4, rewardRisk: 2 },
+      filters: { trend: false, volatility: false, trail: false },
+      armed: false,
+      note: "watch",
+    }, candles, { bid: 140, ask: 140.1, last: 140 }, { minSz: 0.00001, lotSz: 0.00000001 });
+    expect(result.skipped).toBe(false);
+    expect(result.message).toContain("Not armed");
+    expect(ledger.account.positions).toHaveLength(0);
+    expect(ledger.account.openOrders).toHaveLength(0);
+    expect(ledger.account.audits.some((item) => item.message.includes("signal only"))).toBe(true);
+  });
+
   it("refuses a new buy when the daily loss switch is on", () => {
     const ledger = freshLedger(Date.UTC(2026, 8, 1));
     ledger.account.dailyKillLatched = true;

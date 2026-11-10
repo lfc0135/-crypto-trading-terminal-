@@ -1,16 +1,26 @@
 # Walk-forward tuning
 
-Generated 2026-11-10T20:08:56.534Z.
+Generated 2026-11-10T21:45:21.200Z.
 
-No config cleared the out-of-sample gates. BTC-USDT, ETH-USDT, and SOL-USDT, plus the trend, breakout, and intraday grids, did not produce eight training trades, so they were not promoted. The four rows below were the only train survivors. None has a positive return and a positive Sharpe after costs, and none put a day inside the 2–3% band. Nothing is armed.
+Nothing is armed. BTC closed above its 200-day average on 0 days in 2022, so the regime filter kept every long flat. A 0% holdout with no trades is not a bear-market test and is not a pass. From the first 2023 daily close, buy-and-hold BTC returned 337%. The weekly momentum book returned 46.2% over that window (50.1% full sample, not used for selection) and did not beat holding BTC. Single-name trend results are in the table; none is an edge, and none hit the 2–3% day. The paper auto-trader will log signals and will not send orders. GMGN stays watch-only.
 
-Parameters were chosen on the first 70% of each series. The numbers below are the later 30%, which the search did not see. Fees are 10 bps a side and slippage is 2 bps. Sizing uses 2× isolated margin and the same risk limits as the paper book.
+Train is 2021 through 2022. Out of sample is 2023 through the latest bar. A separate 2022 holdout trains on 2021 only. Entries are maker limits at 8 bps. Stops pay the 10 bp taker fee plus 2 bps. A trade is skipped unless the planned move is at least 3× that round trip. Longs are off unless BTC is above its 200-day average and 14-day ATR is at most 6% of price. Time-series tests use 4H and 1D on BTC, ETH, and SOL, and 1D on the rest. The momentum book is the strongest 3 of a fixed 10-name list, rebalanced every 7 daily bars. BNB-USDT on OKX starts 2022-12-20; the other nine start 2021-01-01. That list is not today's volume ranking. GMGN was not tested and stays watch-only. Cross-section Sharpe and daily hit rate are not computed and are left blank.
 
-| Symbol | Strategy | Bar | Filters | Train trades | OOS trades | OOS expectancy | OOS return | OOS max DD | OOS Sharpe | OOS hit rate | Armed | Why |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ZEC-USDT | mean-reversion | 1H | none | 10 | 4 | 0.03 | 0.00% | 0.46% | -0.18 | 0.00% | no | out-of-sample result is flat or negative after costs |
-| ZEC-USDT | mean-reversion | 15m | trend | 8 | 7 | -29.31 | -0.41% | 0.56% | -5.35 | 0.00% | no | out-of-sample expectancy is not positive |
-| XRP-USDT | mean-reversion | 1H | none | 14 | 8 | -70.37 | -1.13% | 1.44% | -7.32 | 0.00% | no | out-of-sample expectancy is not positive |
-| XRP-USDT | mean-reversion | 15m | none | 9 | 6 | -88.79 | -1.07% | 1.30% | -10.92 | 0.00% | no | out-of-sample expectancy is not positive |
+| Symbol | Strategy | Bar | OOS trades | OOS return | OOS max DD | OOS Sharpe | OOS hit rate | 2022 holdout | Armed | Why |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| top-10 | cross-section | 1D | 72 | 46.23% | 21.51% | — | — | no trades | no | 2022 had 0 trades (0 regime-on days). 2023+ book 46.2% versus BTC buy-and-hold 337%. Not an edge, and the paper loop cannot rebalance a basket. |
+| BTC-USDT | ts-trend | 4H | 31 | 3.48% | 3.04% | 0.53 | 0.00% | no trades | no | 2022 holdout did not trade; BTC was under its 200-day average, so the bear year was not a test |
+| ETH-USDT | ts-trend | 4H | 40 | 3.67% | 2.16% | 0.55 | 0.00% | no trades | no | training expectancy was not positive |
+| SOL-USDT | ts-trend | 4H | 46 | 0.46% | 3.94% | 0.06 | 0.00% | no trades | no | 2022 holdout did not trade; BTC was under its 200-day average, so the bear year was not a test |
+| BTC-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 3 training trades |
+| ETH-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 3 training trades |
+| SOL-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 5 training trades |
+| XRP-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 4 training trades |
+| DOGE-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 1 training trades |
+| ADA-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 2 training trades |
+| AVAX-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 4 training trades |
+| LINK-USDT | ts-trend | 1D | — | — | — | — | — | — | no | only 0 training trades |
+| DOT-USDT | ts-trend | 1D | — | — | — | — | — | no trades | no | only 3 training trades |
+| BNB-USDT | ts-trend | 1D | — | — | — | — | — | — | no | only 2 training trades |
 
 A day hits the target only when mark-to-market P&L divided by starting principal lands inside 2–3%. Flat days count as misses. Nothing here is a promise of that band.

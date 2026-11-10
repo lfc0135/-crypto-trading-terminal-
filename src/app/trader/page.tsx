@@ -26,6 +26,8 @@ interface Summary {
   traderEnabled: boolean;
   assignments: Assignment[];
   lastError: string | null;
+  breaches: string[];
+  risk: { dailyKill: boolean; drawdownKill: boolean };
 }
 
 export default function TraderPage() {
@@ -74,7 +76,7 @@ export default function TraderPage() {
         <div>
           <h1 className="text-2xl font-semibold">Auto-trader</h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-            Paper book only. Each new closed candle is evaluated with the train-selected config. Orders go through the same risk engine, including stops, the Dubai flatten on intraday strategies, and the kill switches. Live routing is not used.
+            Paper book only. Unarmed configs still log the signal and do not send an order. Armed configs rest a maker limit under the close. Stops pay the taker fee. Live routing is not used, and this loop cannot turn it on.
           </p>
         </div>
         <div className="flex gap-2">
@@ -92,6 +94,22 @@ export default function TraderPage() {
             <Card label="Drawdown" value={pct(-data.drawdown)} detail={data.traderEnabled ? "Trader on" : "Trader off"} />
           </section>
           {data.lastError && <p className="text-sm text-[var(--down)]">{data.lastError}</p>}
+          <div className="panel p-4">
+            <h2 className="mb-2 text-sm font-medium">Risk-rule breaches today</h2>
+            {data.risk.dailyKill || data.risk.drawdownKill ? (
+              <p className="mb-2 text-sm text-[var(--down)]">
+                {data.risk.dailyKill ? "Daily loss switch is latched. " : ""}
+                {data.risk.drawdownKill ? "Drawdown switch is latched." : ""}
+              </p>
+            ) : null}
+            {data.breaches.length === 0 ? (
+              <p className="text-sm text-[var(--muted)]">No kill, reject, or danger events on this Dubai day.</p>
+            ) : (
+              <ul className="space-y-1 text-sm">
+                {data.breaches.slice(0, 8).map((item) => <li key={item}>{item}</li>)}
+              </ul>
+            )}
+          </div>
           <div className="panel overflow-x-auto p-4">
             <h2 className="mb-3 text-sm font-medium">Active configs</h2>
             {data.assignments.length === 0 ? (

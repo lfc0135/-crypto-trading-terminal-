@@ -54,7 +54,7 @@ export default function TuningPage() {
         <div>
           <h1 className="text-2xl font-semibold">Tuning</h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-            Each config is chosen on the first 70% of the series. The table shows the later 30%. A fragile spike, a thin trade count, a negative out-of-sample expectancy, or a drawdown over 25% stays unarmed. The 2–3% daily band is reported, not fitted.
+            Train is 2021–2022. The table is 2023 through the latest bar, plus a 2022 holdout. Maker entries, taker stops, and a 3× cost gate. Longs only when BTC is above its 200-day average. A thin sample, a negative training result, a 2022 window that never traded, or a drawdown over 25% stays unarmed. The 2–3% day is a scoreboard, not a fit target.
           </p>
         </div>
         <Button type="button" disabled={running} onClick={async () => {
@@ -83,6 +83,7 @@ export default function TuningPage() {
                 <th>Sharpe</th>
                 <th>Hit rate</th>
                 <th>Armed</th>
+                <th>Why</th>
               </tr>
             </thead>
             <tbody>
@@ -95,9 +96,10 @@ export default function TuningPage() {
                   <td className="num">{row.test?.trades ?? "—"}</td>
                   <td className="num">{row.test ? `${(row.test.totalReturnPct * 100).toFixed(2)}%` : "—"}</td>
                   <td className="num">{row.test ? `${(row.test.maxDrawdownPct * 100).toFixed(2)}%` : "—"}</td>
-                  <td className="num">{row.test ? row.test.sharpe.toFixed(2) : "—"}</td>
-                  <td className="num">{row.test ? `${(row.test.hitRate * 100).toFixed(1)}%` : "—"}</td>
+                  <td className="num">{row.test && row.strategyId !== "cross-section" ? row.test.sharpe.toFixed(2) : "—"}</td>
+                  <td className="num">{row.test && row.strategyId !== "cross-section" ? `${(row.test.hitRate * 100).toFixed(1)}%` : "—"}</td>
                   <td>{row.armed ? <Badge tone="up">yes</Badge> : <Badge tone="neutral">no</Badge>}</td>
+                  <td className="max-w-sm text-xs text-[var(--muted)]">{row.rejectReason ?? "passed"}</td>
                 </tr>
               ))}
             </tbody>

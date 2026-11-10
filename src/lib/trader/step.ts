@@ -24,10 +24,9 @@ export function applyTraderBar(
   quote: Quote,
   spec: Spec,
   borrowDailyRate = DEFAULT_BORROW_DAILY,
+  allowLong = true,
 ): { skipped: boolean; decision: TraderDecision | null; message: string } {
   const trader = ensureTrader(ledger);
-  if (!trader.enabled) return { skipped: true, decision: null, message: "Auto-trader is stopped." };
-  if (!job.armed) return { skipped: true, decision: null, message: `${job.symbol} is not armed.` };
   const closed = candles.filter((bar) => bar.time > 0);
   if (closed.length < 30) return { skipped: true, decision: null, message: "Not enough closed candles." };
   const key = jobKey(job);
@@ -41,6 +40,14 @@ export function applyTraderBar(
   trader.lastBar[key] = last;
   trader.lastTickAt = Date.now();
   const prefix = `${job.symbol} ${job.strategyId} ${job.bar}`;
+  if (decision.action === "buy" && !allowLong) {
+    note(ledger, `${prefix}: regime flat. Signal logged, no order. ${decision.reason}`);
+    return { skipped: false, decision, message: "Regime flat. No order." };
+  }
+  if (!job.armed || !trader.enabled) {
+    note(ledger, `${prefix}: signal only, no order. ${decision.action}. ${decision.reason}`);
+    return { skipped: false, decision, message: "Logged. Not armed for paper orders." };
+  }
   if (decision.action === "hold") {
     note(ledger, `${prefix}: hold. ${decision.reason}`);
     return { skipped: false, decision, message: decision.reason };
@@ -63,11 +70,13 @@ export function applyTraderBar(
     return { skipped: false, decision, message: outcome.message };
   }
   if (decision.action === "buy") {
+    const limit = closed[closed.length - 1].close * (1 - 0.0005);
     const outcome = placePaperOrder(ledger, {
       venue: "okx",
       symbol: job.symbol,
       side: "buy",
-      type: "market",
+      type: "limit",
+      limitPrice: limit,
       sizeFromRisk: true,
       stopLoss: decision.stopLoss,
       takeProfit: decision.takeProfit,
@@ -115,6 +124,16 @@ export function summaryFrom(ledger: Ledger, equity: number) {
     targetLow: low,
     targetHigh: high,
     insideBand: dayReturn >= low && dayReturn <= high,
+    breaches: ledger.account.audits
+      .filter((item) => {
+        const key = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(item.ts));
+        return key === dayKey && (item.kind === "kill" || item.kind === "reject" || item.level === "danger");
+      })
+      .map((item) => item.message),
+    risk: {
+      dailyKill: ledger.account.dailyKillLatched,
+      drawdownKill: ledger.account.drawdownKillLatched,
+    },
     traderEnabled: trader.enabled,
     assignments: trader.assignments,
     lastTickAt: trader.lastTickAt,

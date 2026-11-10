@@ -1,16 +1,48 @@
 {
-  "generatedAt": "2026-11-10T20:08:56.534Z",
-  "note": "No config cleared the out-of-sample gates. BTC-USDT, ETH-USDT, and SOL-USDT, plus the trend, breakout, and intraday grids, did not produce eight training trades, so they were not promoted. None of the train survivors has a positive return and a positive Sharpe after costs, and none put a day inside the 2\u20133% band. Nothing is armed.",
+  "generatedAt": "2026-11-10T21:45:21.200Z",
+  "note": "Nothing is armed. BTC closed above its 200-day average on 0 days in 2022, so the regime filter kept every long flat. A 0% holdout with no trades is not a bear-market test and is not a pass. From the first 2023 daily close, buy-and-hold BTC returned 337%. The weekly momentum book returned 46.2% over that window (50.1% full sample, not used for selection) and did not beat holding BTC. Single-name trend results are in the table; none is an edge, and none hit the 2–3% day. The paper auto-trader will log signals and will not send orders. GMGN stays watch-only.",
   "rows": [
     {
-      "strategyId": "mean-reversion",
-      "bar": "1H",
+      "strategyId": "ts-trend",
+      "bar": "1D",
       "params": {
-        "period": 30,
-        "entryZ": 2,
-        "exitZ": 0.25,
+        "lookback": 20,
         "atrPeriod": 14,
-        "atrMult": 2
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 3,
+        "expectancy": -128.77978213281511,
+        "totalReturnPct": -0.006677161829836131,
+        "maxDrawdownPct": 0.010644090868153284,
+        "sharpe": -0.422271729681289,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 49666.141908508194
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 3 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "BTC-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "4H",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
       },
       "filters": {
         "trend": false,
@@ -19,152 +51,452 @@
       },
       "train": {
         "trades": 10,
-        "expectancy": 28.235702976539493,
-        "totalReturnPct": 0.004952512994577107,
-        "maxDrawdownPct": 0.010012125491593003,
-        "sharpe": 1.2246357325692026,
+        "expectancy": 3.6985231935966922,
+        "totalReturnPct": 0.00036712694651908073,
+        "maxDrawdownPct": 0.014510799809440604,
+        "sharpe": 0.018489395993327155,
         "hitRate": 0,
-        "days": 42,
-        "endingEquity": 50247.625649728856
+        "days": 856,
+        "endingEquity": 50018.35634732596
       },
       "test": {
-        "trades": 4,
-        "expectancy": 0.027356097111663757,
-        "totalReturnPct": 2.188487768933101e-06,
-        "maxDrawdownPct": 0.004623641059805377,
-        "sharpe": -0.18365016859385724,
+        "trades": 31,
+        "expectancy": 56.09816139545442,
+        "totalReturnPct": 0.03478086006518174,
+        "maxDrawdownPct": 0.03036557953878467,
+        "sharpe": 0.5291179520963588,
         "hitRate": 0,
-        "days": 18,
-        "endingEquity": 49985.047750055484
+        "days": 1284,
+        "endingEquity": 51670.10041924735
       },
       "fragile": false,
-      "rejectReason": "out-of-sample result is flat or negative after costs",
+      "rejectReason": "2022 holdout did not trade; BTC was under its 200-day average, so the bear year was not a test",
       "selected": true,
       "armed": false,
-      "symbol": "ZEC-USDT"
+      "symbol": "BTC-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
     },
     {
-      "strategyId": "mean-reversion",
-      "bar": "15m",
+      "strategyId": "ts-trend",
+      "bar": "1D",
       "params": {
-        "period": 30,
-        "entryZ": 1.2,
-        "exitZ": 0.25,
+        "lookback": 20,
         "atrPeriod": 14,
-        "atrMult": 3
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 3,
+        "expectancy": -135.85990852978316,
+        "totalReturnPct": -0.0067755111860148265,
+        "maxDrawdownPct": 0.014522987336758553,
+        "sharpe": -0.3396833024476977,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 49661.22444069926
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 3 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "ETH-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "4H",
+      "params": {
+        "lookback": 20,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 12,
+        "expectancy": -2.5262332230525906,
+        "totalReturnPct": -0.0008937029933556717,
+        "maxDrawdownPct": 0.01601338891211232,
+        "sharpe": -0.024220947310180634,
+        "hitRate": 0,
+        "days": 856,
+        "endingEquity": 49955.314850332215
+      },
+      "test": {
+        "trades": 40,
+        "expectancy": 45.87163566486921,
+        "totalReturnPct": 0.036697308531895366,
+        "maxDrawdownPct": 0.021560780663934555,
+        "sharpe": 0.5455553903450603,
+        "hitRate": 0,
+        "days": 1284,
+        "endingEquity": 51786.01825424351
+      },
+      "fragile": false,
+      "rejectReason": "training expectancy was not positive",
+      "selected": true,
+      "armed": false,
+      "symbol": "ETH-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 20,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 5,
+        "expectancy": 116.13790685448498,
+        "totalReturnPct": 0.009638250201222887,
+        "maxDrawdownPct": 0.02014916774541165,
+        "sharpe": 0.42912246914808644,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50481.91251006115
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 5 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "SOL-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "4H",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 12,
+        "expectancy": 165.16154518639368,
+        "totalReturnPct": 0.03951097697026307,
+        "maxDrawdownPct": 0.011811966092502806,
+        "sharpe": 1.1474161512037866,
+        "hitRate": 0,
+        "days": 856,
+        "endingEquity": 51975.54884851316
+      },
+      "test": {
+        "trades": 46,
+        "expectancy": 5.048185569400528,
+        "totalReturnPct": 0.004644330723848486,
+        "maxDrawdownPct": 0.03941135291185124,
+        "sharpe": 0.06398525660881864,
+        "hitRate": 0,
+        "days": 1284,
+        "endingEquity": 50195.72810906175
+      },
+      "fragile": false,
+      "rejectReason": "2022 holdout did not trade; BTC was under its 200-day average, so the bear year was not a test",
+      "selected": true,
+      "armed": false,
+      "symbol": "SOL-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 2,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 4,
+        "expectancy": -4.126011382196403,
+        "totalReturnPct": 0.0009973288182179019,
+        "maxDrawdownPct": 0.01262595673291243,
+        "sharpe": 0.05731449552925735,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50049.8664409109
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 4 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "XRP-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 20,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 1,
+        "expectancy": -199.76179497319526,
+        "totalReturnPct": -0.004014487945843137,
+        "maxDrawdownPct": 0.005453817585409094,
+        "sharpe": -0.5166590928542557,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 49799.27560270784
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 1 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "DOGE-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 20,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 2,
+        "expectancy": 193.9995116894489,
+        "totalReturnPct": 0.007739473914370132,
+        "maxDrawdownPct": 0.0040043447659376345,
+        "sharpe": 0.6228289801257987,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50386.9736957185
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 2 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "ADA-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 4,
+        "expectancy": 196.69697126543855,
+        "totalReturnPct": 0.01565254512092129,
+        "maxDrawdownPct": 0.008612309409958047,
+        "sharpe": 0.8428629377286149,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50782.627256046064
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 4 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "AVAX-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 2,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 0,
+        "expectancy": 0,
+        "totalReturnPct": 0,
+        "maxDrawdownPct": 0,
+        "sharpe": 0,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50000
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 0 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "LINK-USDT",
+      "holdout2022Return": null,
+      "holdout2022Trades": null
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 3,
+        "expectancy": 83.25294604984825,
+        "totalReturnPct": 0.0048649490153021,
+        "maxDrawdownPct": 0.01183806773834873,
+        "sharpe": 0.24903922491515884,
+        "hitRate": 0,
+        "days": 855,
+        "endingEquity": 50243.247450765106
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 3 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "DOT-USDT",
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
+    },
+    {
+      "strategyId": "ts-trend",
+      "bar": "1D",
+      "params": {
+        "lookback": 55,
+        "atrPeriod": 14,
+        "atrMult": 3,
+        "rewardRisk": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 2,
+        "expectancy": 588.0208883967898,
+        "totalReturnPct": 0.02328631909413259,
+        "maxDrawdownPct": 0.0076307295340319265,
+        "sharpe": 1.3996604745268455,
+        "hitRate": 0,
+        "days": 568,
+        "endingEquity": 51164.315954706624
+      },
+      "test": null,
+      "fragile": false,
+      "rejectReason": "only 2 training trades",
+      "selected": true,
+      "armed": false,
+      "symbol": "BNB-USDT",
+      "holdout2022Return": null,
+      "holdout2022Trades": null
+    },
+    {
+      "symbol": "top-10",
+      "strategyId": "cross-section",
+      "bar": "1D",
+      "params": {
+        "lookback": 60,
+        "hold": 3
       },
       "filters": {
         "trend": true,
-        "volatility": false,
+        "volatility": true,
         "trail": false
       },
       "train": {
-        "trades": 8,
-        "expectancy": -20.92854066323671,
-        "totalReturnPct": -0.0033549491448968682,
-        "maxDrawdownPct": 0.008917833384443512,
-        "sharpe": -2.081749047000617,
+        "trades": 0,
+        "expectancy": 0,
+        "totalReturnPct": 0,
+        "maxDrawdownPct": 0,
+        "sharpe": 0,
         "hitRate": 0,
-        "days": 17,
-        "endingEquity": 49832.25254275516
+        "days": 0,
+        "endingEquity": 0
       },
       "test": {
-        "trades": 7,
-        "expectancy": -29.308212752974345,
-        "totalReturnPct": -0.0041031497854164085,
-        "maxDrawdownPct": 0.005565242829532193,
-        "sharpe": -5.349922784943431,
+        "trades": 72,
+        "expectancy": 335.8479734868946,
+        "totalReturnPct": 0.46234916023209593,
+        "maxDrawdownPct": 0.2151084005203439,
+        "sharpe": 0,
         "hitRate": 0,
-        "days": 7,
-        "endingEquity": 49794.6096962132
+        "days": 0,
+        "endingEquity": 73117.4580116048
       },
       "fragile": false,
-      "rejectReason": "out-of-sample expectancy is not positive",
+      "rejectReason": "2022 had 0 trades (0 regime-on days). 2023+ book 46.2% versus BTC buy-and-hold 337%. Not an edge, and the paper loop cannot rebalance a basket.",
       "selected": true,
       "armed": false,
-      "symbol": "ZEC-USDT"
-    },
-    {
-      "strategyId": "mean-reversion",
-      "bar": "1H",
-      "params": {
-        "period": 14,
-        "entryZ": 1.2,
-        "exitZ": 0.25,
-        "atrPeriod": 14,
-        "atrMult": 2
-      },
-      "filters": {
-        "trend": false,
-        "volatility": false,
-        "trail": false
-      },
-      "train": {
-        "trades": 14,
-        "expectancy": -15.890355764426001,
-        "totalReturnPct": -0.0044792112978006005,
-        "maxDrawdownPct": 0.01072479129365157,
-        "sharpe": -1.654436275145364,
-        "hitRate": 0,
-        "days": 42,
-        "endingEquity": 49776.03943510997
-      },
-      "test": {
-        "trades": 8,
-        "expectancy": -70.37241702563819,
-        "totalReturnPct": -0.01125958672410211,
-        "maxDrawdownPct": 0.014390945069656796,
-        "sharpe": -7.322110549005916,
-        "hitRate": 0,
-        "days": 18,
-        "endingEquity": 49436.50263246473
-      },
-      "fragile": false,
-      "rejectReason": "out-of-sample expectancy is not positive",
-      "selected": true,
-      "armed": false,
-      "symbol": "XRP-USDT"
-    },
-    {
-      "strategyId": "mean-reversion",
-      "bar": "15m",
-      "params": {
-        "period": 30,
-        "entryZ": 2,
-        "exitZ": 0.25,
-        "atrPeriod": 14,
-        "atrMult": 3
-      },
-      "filters": {
-        "trend": false,
-        "volatility": false,
-        "trail": false
-      },
-      "train": {
-        "trades": 9,
-        "expectancy": -16.17581093027833,
-        "totalReturnPct": -0.002925969770596004,
-        "maxDrawdownPct": 0.007415366469229168,
-        "sharpe": -1.9043594822723768,
-        "hitRate": 0,
-        "days": 17,
-        "endingEquity": 49853.7015114702
-      },
-      "test": {
-        "trades": 6,
-        "expectancy": -88.79402498081593,
-        "totalReturnPct": -0.01065528299769791,
-        "maxDrawdownPct": 0.013027769979685137,
-        "sharpe": -10.916341167890167,
-        "hitRate": 0,
-        "days": 7,
-        "endingEquity": 49466.82534655212
-      },
-      "fragile": false,
-      "rejectReason": "out-of-sample expectancy is not positive",
-      "selected": true,
-      "armed": false,
-      "symbol": "XRP-USDT"
+      "holdout2022Return": 0,
+      "holdout2022Trades": 0
     }
   ]
 }

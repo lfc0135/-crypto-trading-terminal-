@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { ONCHAIN_PAPER_FEE_BPS, ONCHAIN_PAPER_SLIPPAGE_BPS, PAPER_SLIPPAGE_BPS, PAPER_TAKER_FEE_BPS } from "../defaults";
+import { ONCHAIN_PAPER_FEE_BPS, ONCHAIN_PAPER_SLIPPAGE_BPS, PAPER_MAKER_FEE_BPS, PAPER_SLIPPAGE_BPS, PAPER_TAKER_FEE_BPS } from "../defaults";
 import { evaluateOrder } from "../risk/engine";
 import { dubaiDayKey } from "../time";
 import { applyBuy, applySell } from "./accounting";
@@ -188,7 +188,8 @@ function closePosition(ledger: Ledger, position: Position, price: number, orderT
 }
 
 function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
-  const price = slipped(rawPrice, order.side, order.venue);
+  const makerBuy = order.side === "buy" && order.venue === "okx";
+  const price = makerBuy ? rawPrice : slipped(rawPrice, order.side, order.venue);
   ledger.account.openOrders = ledger.account.openOrders.filter((item) => item.id !== order.id);
   if (order.side === "buy") {
     openLong(ledger, {
@@ -203,6 +204,7 @@ function fillWorking(ledger: Ledger, order: WorkingOrder, rawPrice: number) {
       address: order.address,
       leverage: order.leverage,
       borrowDailyRate: order.borrowDailyRate,
+      feeRate: makerBuy ? PAPER_MAKER_FEE_BPS / 10_000 : undefined,
       note: "Paper limit buy filled.",
     });
   } else {
@@ -243,8 +245,9 @@ function openLong(ledger: Ledger, input: {
   note: string;
   leverage?: number;
   borrowDailyRate?: number;
+  feeRate?: number;
 }) {
-  const fee = input.price * input.qty * feeRate(input.venue);
+  const fee = input.price * input.qty * (input.feeRate ?? feeRate(input.venue));
   const leverage = input.venue === "gmgn" ? 1 : Math.min(HARD_MAX_LEVERAGE, Math.max(1, input.leverage ?? 1));
   const existing = ledger.account.positions.find((position) => position.symbol === input.symbol);
   const parts = marginAndBorrow(input.price * input.qty, leverage);
