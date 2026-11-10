@@ -63,15 +63,42 @@ function writeFile(ledger: Ledger) {
   fs.renameSync(tmp, file);
 }
 
+const lockFile = `${file}.lock`;
+
+async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      if (fs.existsSync(lockFile) && Date.now() - fs.statSync(lockFile).mtimeMs > 90_000) fs.unlinkSync(lockFile);
+      const fd = fs.openSync(lockFile, "wx");
+      fs.writeFileSync(fd, String(process.pid));
+      fs.closeSync(fd);
+      break;
+    } catch {
+      if (Date.now() - start > 60_000) throw new Error("Paper ledger is busy.");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {
+      /* another writer already cleared a stale lock */
+    }
+  }
+}
+
 let queue: Promise<unknown> = Promise.resolve();
 
 export function updateLedger<T>(fn: (ledger: Ledger) => T | Promise<T>): Promise<T> {
-  const run = queue.then(async () => {
+  const run = queue.then(() => withLedgerLock(async () => {
     const draft = structuredClone(readFile());
     const result = await fn(draft);
     writeFile(draft);
     return result;
-  });
+  }));
   queue = run.then(() => undefined, () => undefined);
   return run;
 }

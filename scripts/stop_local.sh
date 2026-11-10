@@ -22,5 +22,6 @@ stop_one() {
   rm -f "$pidfile"
 }
 
+stop_one onchain
 stop_one trader
 stop_one server

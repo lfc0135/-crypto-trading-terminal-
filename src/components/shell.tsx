@@ -12,6 +12,7 @@ const links = [
   ["/strategies", "Strategies"],
   ["/tuning", "Tuning"],
   ["/trader", "Auto"],
+  ["/onchain", "On-chain"],
   ["/risk", "Risk"],
   ["/journal", "Journal"],
 ];

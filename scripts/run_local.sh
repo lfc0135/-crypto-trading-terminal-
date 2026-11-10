@@ -26,5 +26,6 @@ start_one() {
 
 start_one server npx next start -p 43123 -H 0.0.0.0
 TRADER_STANDALONE=1 start_one trader npx tsx src/trader/main.ts
+ONCHAIN_STANDALONE=1 start_one onchain npx tsx src/onchain/main.ts
 echo "Desk: http://127.0.0.1:43123"
 echo "Day score: curl -s http://127.0.0.1:43123/api/summary"

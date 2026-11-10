@@ -68,6 +68,33 @@ export function priceFromTokenInfo(data: Record<string, unknown>): number | null
   return num(price);
 }
 
+function asList(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  if (data && typeof data === "object" && Array.isArray((data as { list?: unknown }).list)) {
+    return (data as { list: unknown[] }).list.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  }
+  return [];
+}
+
+/** Recent public smart-money prints. Read only. This module never calls the swap route. */
+export async function gmgnSmartMoney(chain: GmgnChain, limit = 30): Promise<Record<string, unknown>[]> {
+  return asList(await gmgnPublic("/v1/user/smartmoney", { chain, limit }));
+}
+
+export async function gmgnKol(chain: GmgnChain, limit = 30): Promise<Record<string, unknown>[]> {
+  return asList(await gmgnPublic("/v1/user/kol", { chain, limit }));
+}
+
+export async function gmgnTopHolders(chain: GmgnChain, address: string): Promise<Record<string, unknown>[]> {
+  return asList(await gmgnPublic("/v1/market/token_top_holders", { chain, address, limit: 20, order_by: "amount_percentage", direction: "desc" }));
+}
+
+export async function gmgnPool(chain: GmgnChain, address: string): Promise<Record<string, unknown> | null> {
+  const data = await gmgnPublic("/v1/token/pool_info", { chain, address });
+  if (!data || typeof data !== "object") return null;
+  return data as Record<string, unknown>;
+}
+
 export async function gmgnSecurity(chain: GmgnChain, address: string): Promise<Record<string, unknown> | null> {
   const data = await gmgnPublic("/v1/token/security", { chain, address });
   if (!data || typeof data !== "object") return null;

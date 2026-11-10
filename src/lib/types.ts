@@ -176,6 +176,8 @@ export interface Ledger {
   account: Account;
   settings: Settings;
   trader?: TraderState;
+  /** Dollars moved out of book cash into the on-chain paper sleeve. */
+  onchainReserved?: number;
 }
 
 export interface OkxTicker {

@@ -105,7 +105,9 @@ chmod +x scripts/run_local.sh scripts/stop_local.sh
 
 That installs dependencies if needed, builds once, and starts the site and the paper auto-trader with `nohup`. Logs and PIDs are `run/server.log`, `run/trader.log`, `run/server.pid`, and `run/trader.pid`. Stop both with `./scripts/stop_local.sh`.
 
-The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score: realized P&L, mark-to-market, fill count, and risk-rule breaches.
+The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score: realized P&L, mark-to-market, fill count, risk-rule breaches, and the on-chain sleeve.
+
+The third process is the Solana paper sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash, watches pump.fun, PumpSwap, and Raydium, and does not sign transactions. GMGN is a filter when `GMGN_API_KEY` is set. Without that key the sleeve still logs DexScreener and Solana RPC checks and does not invent wallet scores. See `ONCHAIN.md`.
 
 The trader process never turns on live trading. It logs a signal for every saved config. It sends a paper order only when that config was armed by the walk-forward test and you have pressed Start on the Auto page.
 
@@ -128,6 +130,7 @@ On a small VPS, Fly.io, or Railway, mount a volume at `/app/data` and run the sa
 - Security `buy_tax` / `sell_tax` were `0` on a BONK read. Values above 1 are treated as percent, values from 0 to 1 as a fraction. That unit is inferred.
 - `honeypot` (0/1) is the field that was populated. `is_honeypot` was null on that read.
 - GMGN documents IPv4 only. A 401/403 with a valid key can be an IPv6 path.
+- The on-chain sleeve is a forward paper test. Without `GMGN_API_KEY` it cannot score wallets, and it does not backfill a history it does not have. See `ONCHAIN.md`.
 - Paper stops fill from the last polled mark. A gap between polls is only as good as the next price.
 - Backtest Sharpe uses bar-close returns and a 0% risk-free rate. Under 30 Dubai days it is labeled unstable.
 - The JSON ledger is meant for one trading loop. A lock file keeps a second loop from double-filling, but two web servers writing the same file can still race.
