@@ -1,5 +1,5 @@
 import { dubaiDayKey } from "../time";
-import { defaultMomentumConfig, evaluateMomentumSafety, momentumBreakout, normalizeConfig, type MomentumBar, type MomentumConfig } from "./momentum";
+import { defaultMomentumConfig, evaluateMomentumSafety, momentumBreakout, momentumPullback, normalizeConfig, type MomentumBar, type MomentumConfig } from "./momentum";
 
 /** Paper sleeve taken from the $50,000 book. Not extra capital. */
 export const SLEEVE_USD = 2_500;
@@ -283,6 +283,8 @@ export interface SleevePosition {
   peakPrice: number;
   lastPrice: number;
   feeRate: number;
+  /** Pullback entries store the stop under the pullback low. */
+  stopPrice?: number;
 }
 
 export interface SleevePending {
@@ -292,6 +294,7 @@ export interface SleevePending {
   signalPrice: number;
   wallets: string[];
   readyAt: number;
+  stopPrice?: number;
 }
 
 export interface SleeveFill {
@@ -453,18 +456,20 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
     if (mid > position.peakPrice) position.peakPrice = mid;
     if (!state.config.walletGate) {
       const cfg = state.config;
-      const hardPx = position.avgCost * (1 - cfg.hardStop);
+      const hardPx = position.stopPrice && position.stopPrice > 0 ? position.stopPrice : position.avgCost * (1 - cfg.hardStop);
       const age = now - position.openedAt;
       const progressed = position.peakPrice >= position.avgCost * (1 + cfg.progressPct);
       let qty = 0;
       let note = "";
       if (age >= cfg.maxHoldMs) {
         qty = position.qty;
-        note = "Max hold of 3h. Closed the full position.";
+        note = `Max hold of ${Math.round(cfg.maxHoldMs / 60_000)}m. Closed the full position.`;
       } else if (mid <= hardPx) {
         qty = position.qty;
-        note = `Hard stop at -${Math.round(cfg.hardStop * 100)}%.`;
-      } else if (age >= cfg.progressWindowMs && !progressed) {
+        note = position.stopPrice
+          ? "Hard stop under the pullback low."
+          : `Hard stop at -${Math.round(cfg.hardStop * 100)}%.`;
+      } else if (cfg.entryMode !== "pullback" && age >= cfg.progressWindowMs && !progressed) {
         qty = position.qty;
         note = "Time stop. Price never reached +5% inside the window.";
       } else if (mid >= position.avgCost * (1 + cfg.takeProfit)) {
@@ -538,7 +543,9 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
       kind: "info",
       message: state.config.walletGate
         ? "Wallet gate is on. Entries still require a scored cluster."
-        : "Momentum mode. Wallet scoring is off. A buy needs a breakout, 3× volume, rising buys, and accelerating price. Safety is mint, freeze, a sell that returns funds, $50k liquidity, and 5 minutes of age.",
+        : state.config.entryMode === "pullback"
+          ? "Pullback mode. Wallet scoring is off. A buy waits for the first pullback after a hype spike, then a higher-low or VWAP reclaim. The stop sits under the pullback low. Safety is mint, freeze, a sell that returns funds, $50k liquidity, and 5 minutes of age."
+          : "Momentum mode. Wallet scoring is off. A buy needs a breakout, 3× volume, rising buys, and accelerating price. Safety is mint, freeze, a sell that returns funds, $50k liquidity, and 5 minutes of age.",
     });
   }
   if (!state.config.walletGate) {
@@ -548,7 +555,12 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
       seenMomentum.add(token.address);
       if (state.positions.some((row) => row.address === token.address) || state.pending.some((row) => row.address === token.address)) continue;
       const gate = evaluateMomentumSafety(token);
-      const signal = gate.pass ? momentumBreakout(token.bars ?? [], state.config, { now: token.buyTx5m ?? null, average: token.buyTxAvg ?? null }) : null;
+      const pullback = state.config.entryMode === "pullback";
+      const signal = !gate.pass
+        ? null
+        : pullback
+          ? momentumPullback(token.bars ?? [], state.config)
+          : momentumBreakout(token.bars ?? [], state.config, { now: token.buyTx5m ?? null, average: token.buyTxAvg ?? null });
       const message = !gate.pass
         ? gate.reasons.slice(0, 3).join(" ")
         : signal && !signal.ok
@@ -564,6 +576,7 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
         pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message: "Five paper positions are already open." });
         continue;
       }
+      const stopPrice = pullback && signal && "stop" in signal && signal.stop != null && signal.stop > 0 ? signal.stop : undefined;
       state.pending.push({
         address: token.address,
         symbol: token.symbol,
@@ -571,13 +584,17 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
         signalPrice: token.price ?? 0,
         wallets: [],
         readyAt: now + FILL_DELAY_MS,
+        stopPrice,
       });
+      const pullMsg = pullback && signal && "pullbackLow" in signal
+        ? `First pullback after a hype spike. Retrace low ${signal.pullbackLow?.toPrecision(4) ?? "?"}. Stop under that low. Fill waits ${FILL_DELAY_MS / 1000}s.`
+        : `Breakout above ${signal && "priorHigh" in signal ? signal.priorHigh?.toPrecision(4) ?? "the recent high" : "the recent high"} with ${signal && "volumeRatio" in signal ? signal.volumeRatio?.toFixed(1) ?? "?" : "?"}× volume. Fill waits ${FILL_DELAY_MS / 1000}s.`;
       pushLog(state, {
         ts: now,
         kind: "signal",
         address: token.address,
         symbol: token.symbol,
-        message: `Breakout above ${signal?.priorHigh?.toPrecision(4) ?? "the recent high"} with ${signal?.volumeRatio?.toFixed(1) ?? "?"}× volume. Fill waits ${FILL_DELAY_MS / 1000}s.`,
+        message: pullMsg,
       });
     }
     return state;
@@ -660,6 +677,7 @@ function openPosition(state: OnchainState, token: TokenCheck, pending: SleevePen
     peakPrice: exec.price,
     lastPrice: exec.price,
     feeRate: token.feeRate,
+    stopPrice: pending.stopPrice,
   });
   state.fills.unshift({
     id: `${now}-buy-${token.address}`,
@@ -673,7 +691,9 @@ function openPosition(state: OnchainState, token: TokenCheck, pending: SleevePen
     pnl: 0,
     note: state.config.walletGate
       ? `Paper buy ${FILL_DELAY_MS / 1000}s after ${pending.wallets.length} wallets. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`
-      : `Momentum buy ${FILL_DELAY_MS / 1000}s after the breakout. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`,
+      : state.config.entryMode === "pullback"
+        ? `Pullback buy ${FILL_DELAY_MS / 1000}s after the first pullback confirmed. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`
+        : `Momentum buy ${FILL_DELAY_MS / 1000}s after the breakout. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`,
   });
   pushLog(state, {
     ts: now,
@@ -708,7 +728,9 @@ export function onchainPublic(state: OnchainState, now = Date.now()) {
     openPositions: state.positions.length,
     positions: state.positions.map((position) => ({
       ...position,
-      stop: position.avgCost * (1 - (state.config.walletGate ? HARD_STOP : state.config.hardStop)),
+      stop: position.stopPrice && position.stopPrice > 0
+        ? position.stopPrice
+        : position.avgCost * (1 - (state.config.walletGate ? HARD_STOP : state.config.hardStop)),
       target: position.avgCost * (1 + (state.config.walletGate ? TAKE_HALF_AT : state.config.takeProfit)),
       ageMs: now - position.openedAt,
     })),
@@ -731,6 +753,8 @@ export function onchainPublic(state: OnchainState, now = Date.now()) {
     solPriceNote: state.solPriceNote,
     note: state.config.walletGate
       ? "Wallet gate is on. A buy still needs scored wallets plus the strict safety screen. Nothing is signed."
-      : `Momentum paper test. Wallet scoring is off. Take profit closes the full position at +${Math.round(state.config.takeProfit * 100)}%. Hard stop −${Math.round(state.config.hardStop * 100)}%. Time stop if price never reaches +${Math.round(state.config.progressPct * 100)}% within ${Math.round(state.config.progressWindowMs / 60_000)} minutes. Max hold ${Math.round(state.config.maxHoldMs / 60_000)} minutes. The +20% classic preset stays selectable. Nothing is signed.`,
+      : state.config.entryMode === "pullback"
+        ? `Pullback paper test. Wallet scoring is off. Entry is the first pullback after a hype spike (${Math.round(state.config.retrace * 100)}% retrace, ${state.config.confirm}). Take profit closes the full position at +${Math.round(state.config.takeProfit * 100)}%. The stop sits under the pullback low. Max hold ${Math.round(state.config.maxHoldMs / 60_000)} minutes. The +20% breakout preset remains the default. Nothing is signed.`
+        : `Momentum paper test. Wallet scoring is off. Take profit closes the full position at +${Math.round(state.config.takeProfit * 100)}%. Hard stop −${Math.round(state.config.hardStop * 100)}%. Time stop if price never reaches +${Math.round(state.config.progressPct * 100)}% within ${Math.round(state.config.progressWindowMs / 60_000)} minutes. Max hold ${Math.round(state.config.maxHoldMs / 60_000)} minutes. The +20% classic preset stays selectable. Nothing is signed.`,
   };
 }

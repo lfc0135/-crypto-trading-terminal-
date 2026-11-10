@@ -1,6 +1,21 @@
 import { buyExecution, priorityFeeUsd, sellExecution, type TokenCheck } from "./model";
+import {
+  CLASSIC_PULLBACK,
+  DEFAULT_PULLBACK,
+  MAX_PULLBACK_STOP,
+  PULLBACK_GRID,
+  estimateQuoteReserve,
+  momentumPullback,
+  pullbackEntries,
+  type PullbackConfirm,
+} from "./pullback";
+
+export { CLASSIC_PULLBACK, PULLBACK_GRID, classifyRug, estimateQuoteReserve, fifteenDayNet, momentumPullback } from "./pullback";
+export type { PullbackConfirm } from "./pullback";
 
 /** Wallet scoring stays in the codebase. Momentum does not require it. */
+export type EntryMode = "breakout" | "pullback";
+
 export interface MomentumConfig {
   walletGate: boolean;
   tradeUsd: number;
@@ -13,6 +28,14 @@ export interface MomentumConfig {
   maxHoldMs: number;
   minLiquidityUsd: number;
   minAgeMs: number;
+  /** Default is breakout. Pullback is an opt-in paper preset. */
+  entryMode: EntryMode;
+  spikePct: number;
+  spikeBars: number;
+  retrace: number;
+  confirm: PullbackConfirm;
+  maxPullbackBars: number;
+  stopBuffer: number;
 }
 
 /** The +20% rule. Stays selectable even if a tighter combo becomes the default. */
@@ -47,6 +70,13 @@ export function defaultMomentumConfig(): MomentumConfig {
     maxHoldMs: 3 * 60 * 60 * 1000,
     minLiquidityUsd: 50_000,
     minAgeMs: 5 * 60 * 1000,
+    entryMode: "breakout",
+    spikePct: DEFAULT_PULLBACK.spikePct,
+    spikeBars: DEFAULT_PULLBACK.spikeBars,
+    retrace: DEFAULT_PULLBACK.retrace,
+    confirm: DEFAULT_PULLBACK.confirm,
+    maxPullbackBars: DEFAULT_PULLBACK.maxPullbackBars,
+    stopBuffer: DEFAULT_PULLBACK.stopBuffer,
   };
 }
 
@@ -67,6 +97,13 @@ export function normalizeConfig(raw: Partial<MomentumConfig> | null | undefined)
     maxHoldMs: preset(raw.maxHoldMs, [60 * 60_000, 90 * 60_000, 3 * 60 * 60_000], base.maxHoldMs),
     lookbackBars: raw.lookbackBars && raw.lookbackBars >= 3 && raw.lookbackBars <= 12 ? raw.lookbackBars : base.lookbackBars,
     volumeMultiple: raw.volumeMultiple && raw.volumeMultiple >= 2 && raw.volumeMultiple <= 8 ? raw.volumeMultiple : base.volumeMultiple,
+    entryMode: raw.entryMode === "pullback" ? "pullback" : "breakout",
+    spikePct: preset(raw.spikePct, [0.3], base.spikePct),
+    spikeBars: raw.spikeBars && raw.spikeBars >= 8 && raw.spikeBars <= 24 ? raw.spikeBars : base.spikeBars,
+    retrace: preset(raw.retrace, [0.25, 0.4, 0.5], base.retrace),
+    confirm: raw.confirm === "reclaim" ? "reclaim" : "higher-low",
+    maxPullbackBars: raw.maxPullbackBars && raw.maxPullbackBars >= 12 && raw.maxPullbackBars <= 48 ? raw.maxPullbackBars : base.maxPullbackBars,
+    stopBuffer: raw.stopBuffer != null && raw.stopBuffer >= 0 && raw.stopBuffer <= 0.02 ? raw.stopBuffer : base.stopBuffer,
   };
 }
 
@@ -91,7 +128,19 @@ export function halfDays(times: number[]): { trainFrom: number; trainUntil: numb
 
 /** Highest out-of-sample daily sleeve return among combos with enough trades. In-sample is ignored. */
 export function presetPatch(id: string): Partial<MomentumConfig> | null {
-  if (id === "classic-tp20") return { ...CLASSIC_MOMENTUM, walletGate: false };
+  if (id === "classic-tp20") return { ...CLASSIC_MOMENTUM, walletGate: false, entryMode: "breakout" };
+  if (id === "pullback-tp20") return { ...CLASSIC_PULLBACK, walletGate: false };
+  const pull = PULLBACK_GRID.find((item) => item.id === id);
+  if (pull) {
+    return {
+      ...CLASSIC_PULLBACK,
+      retrace: pull.retrace,
+      confirm: pull.confirm,
+      takeProfit: pull.takeProfit,
+      maxHoldMs: pull.maxHoldMs,
+      walletGate: false,
+    };
+  }
   const row = TUNE_GRID.find((item) => item.id === id);
   if (!row) return null;
   return {
@@ -101,6 +150,7 @@ export function presetPatch(id: string): Partial<MomentumConfig> | null {
     progressWindowMs: row.progressWindowMs,
     maxHoldMs: row.maxHoldMs,
     walletGate: false,
+    entryMode: "breakout",
   };
 }
 
@@ -227,6 +277,7 @@ interface OpenReplay {
   reserve: number;
   feeRate: number;
   entryTime: number;
+  stop: number;
 }
 
 /**
@@ -239,13 +290,20 @@ export function replayPortfolio(
   priorityUsd = 0.02,
   window?: { from?: number; until?: number },
 ): ReplayReport {
-  const usable = series.filter((row) => row.safetyPass && row.bars.length > config.lookbackBars + 3 && row.quoteReserveUsd > 0);
+  const minBars = config.entryMode === "pullback" ? 16 : config.lookbackBars + 3;
+  const usable = series.filter((row) => row.safetyPass && row.bars.length > minBars);
   const times = [...new Set(usable.flatMap((row) => row.bars.map((bar) => bar.time)))].sort((a, b) => a - b);
   const barAt = new Map<string, Map<number, MomentumBar>>();
+  const pullbackAt = new Map<string, Map<number, ReturnType<typeof pullbackEntries>[number]>>();
   for (const row of usable) {
     const map = new Map<number, MomentumBar>();
     for (const bar of [...row.bars].sort((a, b) => a.time - b.time)) map.set(bar.time, bar);
     barAt.set(row.symbol, map);
+    if (config.entryMode === "pullback") {
+      const hits = new Map<number, ReturnType<typeof pullbackEntries>[number]>();
+      for (const entry of pullbackEntries(row.bars, config)) hits.set(entry.time, entry);
+      pullbackAt.set(row.symbol, hits);
+    }
   }
   let cash = 2_500;
   const open: OpenReplay[] = [];
@@ -255,8 +313,15 @@ export function replayPortfolio(
   let paused = false;
   const dayReturns: number[] = [];
 
+  const reserveAt = (row: ReplaySeries, time: number) => {
+    const estimated = estimateQuoteReserve(row.bars, time, row.quoteReserveUsd);
+    return estimated > 0 ? estimated : Math.max(0, row.quoteReserveUsd);
+  };
+
   const close = (position: OpenReplay, time: number, mid: number, reason: ReplayTrade["reason"]) => {
-    const exec = sellExecution(mid, position.qty, position.reserve, position.feeRate);
+    const row = series.find((item) => item.symbol === position.symbol);
+    const reserve = row ? reserveAt(row, time) : position.reserve;
+    const exec = sellExecution(mid, position.qty, reserve > 0 ? reserve : position.reserve, position.feeRate);
     const proceeds = exec ? exec.proceeds : 0;
     const pnl = proceeds - priorityUsd - position.spent;
     cash += Math.max(0, proceeds - priorityUsd);
@@ -286,7 +351,7 @@ export function replayPortfolio(
       const bar = barAt.get(position.symbol)?.get(time);
       if (!bar) continue;
       if (bar.high > position.peak) position.peak = bar.high;
-      const hard = position.avgCost * (1 - config.hardStop);
+      const hard = position.stop;
       const tpMid = position.avgCost * (1 + config.takeProfit);
       const stopFirst = bar.low <= hard;
       if (stopFirst) {
@@ -301,7 +366,7 @@ export function replayPortfolio(
       const age = time - position.openedAt;
       const progressed = position.peak >= position.avgCost * (1 + config.progressPct);
       if (age >= config.maxHoldMs) close(position, time, bar.close, "max-hold");
-      else if (age >= config.progressWindowMs && !progressed) close(position, time, bar.close, "time-stop");
+      else if (config.entryMode !== "pullback" && age >= config.progressWindowMs && !progressed) close(position, time, bar.close, "time-stop");
     }
     if (paused || dayPnl <= -250) {
       paused = dayPnl <= -250;
@@ -315,12 +380,20 @@ export function replayPortfolio(
       const history = row.bars.filter((bar) => bar.time <= time);
       const last = history[history.length - 1];
       if (!last || last.time !== time) continue;
-      const signal = momentumBreakout(history, config);
-      if (!signal.ok) continue;
+      const pullback = config.entryMode === "pullback" ? pullbackAt.get(row.symbol)?.get(time) ?? null : null;
+      const signal = pullback ?? (config.entryMode === "pullback" ? null : momentumBreakout(history, config));
+      if (!signal || !("ok" in signal ? signal.ok : true)) continue;
+      if (config.entryMode === "pullback" && !pullback) continue;
       const next = row.bars.find((bar) => bar.time > time);
       if (!next) continue;
+      const stop = pullback?.stop != null && pullback.stop > 0
+        ? pullback.stop
+        : next.open * (1 - config.hardStop);
+      if (next.open <= stop || stop < next.open * (1 - MAX_PULLBACK_STOP)) continue;
       const budget = config.tradeUsd;
-      const exec = buyExecution(next.open, budget - priorityUsd, row.quoteReserveUsd, row.feeRate);
+      const reserve = reserveAt(row, next.time);
+      if (!(reserve > 0)) continue;
+      const exec = buyExecution(next.open, budget - priorityUsd, reserve, row.feeRate);
       if (!exec) continue;
       cash -= budget;
       open.push({
@@ -330,9 +403,10 @@ export function replayPortfolio(
         spent: budget,
         openedAt: next.time,
         peak: exec.price,
-        reserve: row.quoteReserveUsd,
+        reserve,
         feeRate: row.feeRate,
         entryTime: next.time,
+        stop,
       });
     }
   }
@@ -360,6 +434,8 @@ export function replayPortfolio(
     sleeveDailyPct: spanDays > 0 ? totalPnlUsd / 2_500 / spanDays : 0,
     tradeDayAvgPct: tradeDays.length ? tradeDays.reduce((sum, value) => sum + value, 0) / tradeDays.length : null,
     flatDays: dayReturns.filter((value) => value === 0).length,
-    note: "Replay waits for the next 5-minute bar, charges pool impact and a priority fee, and takes the stop before the target when both trade. GeckoTerminal candles have no buy counts, so this replay does not enforce the rising-buy rule. The live loop does, using the pool's 5-minute versus hourly buy counts. The universe is pools that still exist.",
+    note: config.entryMode === "pullback"
+      ? "Pullback replay waits for the first confirmed retrace after a hype spike, fills on the next 5-minute open, charges pool impact plus a priority fee, and stops under the pullback low. Depth on collapsed pools is implied from trailing USD volume, which increases slippage on thin bars. Rugged and dead names are kept in the universe. GeckoTerminal candles have no buy counts."
+      : "Replay waits for the next 5-minute bar, charges pool impact and a priority fee, and takes the stop before the target when both trade. GeckoTerminal candles have no buy counts, so this replay does not enforce the rising-buy rule. The live loop does, using the pool's 5-minute versus hourly buy counts. Collapsed pools stay in the tape when the caller includes them.",
   };
 }

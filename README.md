@@ -107,7 +107,7 @@ That installs dependencies if needed, builds once, and starts the site and the p
 
 The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score, plus `kraken` (paper P&L and the BTC/ETH/SOL mark gap versus OKX) and the on-chain sleeve. `PAPER_EXCHANGE` is `okx`, `kraken`, or `both`. Kraken paper uses public futures marks and does not read a key. See `KRAKEN.md`.
 
-The third process is the Solana meme-momentum sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash and trades breakouts on pump.fun graduates, PumpSwap, and Raydium. It does not sign transactions. Wallet scoring is off unless `config.walletGate` is turned on. See `MOMENTUM.md`.
+The third process is the Solana meme-momentum sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash and trades breakouts on pump.fun graduates, PumpSwap, and Raydium. It does not sign transactions. Wallet scoring is off unless `config.walletGate` is turned on. A first-pullback entry is an optional paper preset; the default stays the breakout +20% rule. See `MOMENTUM.md` and `PULLBACK.md`.
 
 The trader process never turns on live trading. It logs a signal for every saved config. It sends a paper order only when that config was armed by the walk-forward test and you have pressed Start on the Auto page.
 

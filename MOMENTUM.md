@@ -32,3 +32,7 @@ Not on this sample. The sleeve lost about 1.7% a day even with survivorship in i
 ## Live paper
 
 First momentum ticks after the switch: 0 signals, 0 fills, 0 open positions, day P&L $0 (0% of the sleeve). FAIR and AICoin were skipped for liquidity under $50,000. CLAUDIA, WEALTH, STANK, and DacityCoin cleared the safety checks and were skipped because price was not above the 30-minute high. Wallet scoring stayed off.
+
+## Pullback entry
+
+An optional paper preset waits for the first pullback after a hype spike instead of buying the breakout. The default is still the breakout +20% rule above. See `PULLBACK.md`.

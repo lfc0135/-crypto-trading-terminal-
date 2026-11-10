@@ -53,7 +53,7 @@ interface Sleeve {
   takeProfits?: number;
   hardStops?: number;
   timeStops?: number;
-  config?: { tradeUsd: number; hardStop: number; takeProfit: number; progressPct: number; progressWindowMs: number; maxHoldMs: number; walletGate: boolean };
+  config?: { tradeUsd: number; hardStop: number; takeProfit: number; progressPct: number; progressWindowMs: number; maxHoldMs: number; walletGate: boolean; entryMode?: string };
   gmgn: boolean;
   lastError: string | null;
   note: string;
@@ -132,8 +132,9 @@ export default function OnchainPage() {
               <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("classic-tp20")}>+20% classic</button>
               <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("tp10-stop6-p3-20m-hold60")}>+10% / −6% / 20m</button>
               <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("tp12-stop8-p3-30m-hold60")}>+12% / −8% / 30m</button>
+              <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("pullback-tp20")}>Pullback +20%</button>
             </div>
-            <p className="mt-2 text-xs text-[var(--muted)]">The six tighter combos lost money out of sample, so none replaced the +20% default. These buttons only change the paper sleeve.</p>
+            <p className="mt-2 text-xs text-[var(--muted)]">The default stays the +20% breakout rule. Pullback +20% is an optional paper preset that waits for the first retrace after a hype spike. These buttons only change the paper sleeve.</p>
           </div>
           <div className="panel overflow-x-auto p-4">
             <h2 className="mb-3 text-sm font-medium">Paper positions</h2>
