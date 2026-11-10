@@ -107,7 +107,7 @@ That installs dependencies if needed, builds once, and starts the site and the p
 
 The site listens on `http://127.0.0.1:43123`. `GET /api/summary` is the day's paper score: realized P&L, mark-to-market, fill count, risk-rule breaches, and the on-chain sleeve.
 
-The third process is the Solana paper sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash, watches pump.fun, PumpSwap, and Raydium, and does not sign transactions. GMGN is a filter when `GMGN_API_KEY` is set. Without that key the sleeve still logs DexScreener and Solana RPC checks and does not invent wallet scores. See `ONCHAIN.md`.
+The third process is the Solana meme-momentum sleeve (`src/onchain/main.ts`). It reserves $2,500 of book cash and trades breakouts on pump.fun graduates, PumpSwap, and Raydium. It does not sign transactions. Wallet scoring is off unless `config.walletGate` is turned on. See `MOMENTUM.md`.
 
 The trader process never turns on live trading. It logs a signal for every saved config. It sends a paper order only when that config was armed by the walk-forward test and you have pressed Start on the Auto page.
 

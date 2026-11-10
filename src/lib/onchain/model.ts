@@ -1,4 +1,5 @@
 import { dubaiDayKey } from "../time";
+import { defaultMomentumConfig, evaluateMomentumSafety, momentumBreakout, normalizeConfig, type MomentumBar, type MomentumConfig } from "./momentum";
 
 /** Paper sleeve taken from the $50,000 book. Not extra capital. */
 export const SLEEVE_USD = 2_500;
@@ -56,6 +57,9 @@ export interface TokenCheck {
   volumeUsd: number | null;
   wash: boolean | null;
   venue: string | null;
+  bars?: MomentumBar[];
+  buyTx5m?: number | null;
+  buyTxAvg?: number | null;
 }
 
 export interface GateResult {
@@ -331,6 +335,7 @@ export interface OnchainState {
   gmgn: boolean;
   solPriceNote: string | null;
   ticks: number;
+  config: MomentumConfig;
 }
 
 export function emptyOnchain(now: number, principal = SLEEVE_USD): OnchainState {
@@ -353,6 +358,7 @@ export function emptyOnchain(now: number, principal = SLEEVE_USD): OnchainState 
     gmgn: false,
     solPriceNote: null,
     ticks: 0,
+    config: defaultMomentumConfig(),
   };
 }
 
@@ -408,6 +414,7 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
   const now = input.now;
   state.gmgn = input.gmgn;
   state.solPriceNote = input.solPriceNote;
+  state.config = normalizeConfig(state.config);
   state.lastTickAt = now;
   state.lastError = null;
   state.ticks += 1;
@@ -444,6 +451,33 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
     }
     position.lastPrice = mid;
     if (mid > position.peakPrice) position.peakPrice = mid;
+    if (!state.config.walletGate) {
+      const cfg = state.config;
+      const hardPx = position.avgCost * (1 - cfg.hardStop);
+      const age = now - position.openedAt;
+      const progressed = position.peakPrice >= position.avgCost * (1 + cfg.progressPct);
+      let qty = 0;
+      let note = "";
+      if (age >= cfg.maxHoldMs) {
+        qty = position.qty;
+        note = "Max hold of 3h. Closed the full position.";
+      } else if (mid <= hardPx) {
+        qty = position.qty;
+        note = `Hard stop at -${Math.round(cfg.hardStop * 100)}%.`;
+      } else if (age >= cfg.progressWindowMs && !progressed) {
+        qty = position.qty;
+        note = "Time stop. Price never reached +5% inside the window.";
+      } else if (mid >= position.avgCost * (1 + cfg.takeProfit)) {
+        qty = position.qty;
+        note = "Take profit at +20% of principal.";
+      }
+      if (qty > 0) {
+        const exec = sellExecution(mid, qty, token.quoteReserveUsd, position.feeRate);
+        if (!exec) pushLog(state, { ts: now, kind: "skip", address: position.address, symbol: position.symbol, message: "Exit skipped. The pool cannot absorb the sell." });
+        else sellQty(state, position, qty, exec.price, exec.proceeds, input.priorityUsd, now, `${note} Fill $${exec.price.toPrecision(4)} after pool impact. Priority fee $${input.priorityUsd.toFixed(3)}.`);
+      }
+      continue;
+    }
     const hard = position.avgCost * (1 - HARD_STOP);
     const trail = position.halfTaken ? position.peakPrice * (1 - TRAIL_AFTER_HALF) : hard;
     const stop = Math.max(hard, trail);
@@ -490,7 +524,7 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
       pushLog(state, { ts: now, kind: "skip", address: pending.address, symbol: pending.symbol, message: "Delayed fill cancelled. The pool quote expired." });
       continue;
     }
-    const gate = evaluateToken(token);
+    const gate = state.config.walletGate ? evaluateToken(token) : evaluateMomentumSafety(token);
     if (!gate.pass || token.price == null || token.quoteReserveUsd == null) {
       pushLog(state, { ts: now, kind: "skip", address: pending.address, symbol: pending.symbol, message: `Delayed fill cancelled. ${gate.reasons[0] ?? "Gate failed."}` });
       continue;
@@ -498,8 +532,55 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
     openPosition(state, token, pending, input.priorityUsd, now);
   }
 
-  if (!input.gmgn && input.trades.length === 0 && state.ticks === 1) {
-    pushLog(state, { ts: now, kind: "info", message: "GMGN smart-money feed is off. No historical wallet tape is loaded. Entries wait for a scored cluster. This is a forward test." });
+  if (state.ticks === 1) {
+    pushLog(state, {
+      ts: now,
+      kind: "info",
+      message: state.config.walletGate
+        ? "Wallet gate is on. Entries still require a scored cluster."
+        : "Momentum mode. Wallet scoring is off. A buy needs a breakout, 3× volume, rising buys, and accelerating price. Safety is mint, freeze, a sell that returns funds, $50k liquidity, and 5 minutes of age.",
+    });
+  }
+  if (!state.config.walletGate) {
+    const seenMomentum = new Set<string>();
+    for (const token of input.tokens) {
+      if (seenMomentum.has(token.address)) continue;
+      seenMomentum.add(token.address);
+      if (state.positions.some((row) => row.address === token.address) || state.pending.some((row) => row.address === token.address)) continue;
+      const gate = evaluateMomentumSafety(token);
+      const signal = gate.pass ? momentumBreakout(token.bars ?? [], state.config, { now: token.buyTx5m ?? null, average: token.buyTxAvg ?? null }) : null;
+      const message = !gate.pass
+        ? gate.reasons.slice(0, 3).join(" ")
+        : signal && !signal.ok
+          ? signal.reasons[0] ?? "No momentum signal."
+          : "";
+      if (message) {
+        const recent = state.logs.some((log) => log.address === token.address && log.message === message && now - log.ts < 30 * 60 * 1000);
+        if (!recent) pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message });
+        continue;
+      }
+      if (state.paused) continue;
+      if (state.positions.length + state.pending.length >= MAX_OPEN) {
+        pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message: "Five paper positions are already open." });
+        continue;
+      }
+      state.pending.push({
+        address: token.address,
+        symbol: token.symbol,
+        signalTs: now,
+        signalPrice: token.price ?? 0,
+        wallets: [],
+        readyAt: now + FILL_DELAY_MS,
+      });
+      pushLog(state, {
+        ts: now,
+        kind: "signal",
+        address: token.address,
+        symbol: token.symbol,
+        message: `Breakout above ${signal?.priorHigh?.toPrecision(4) ?? "the recent high"} with ${signal?.volumeRatio?.toFixed(1) ?? "?"}× volume. Fill waits ${FILL_DELAY_MS / 1000}s.`,
+      });
+    }
+    return state;
   }
   const seen = new Set<string>();
   for (const token of input.tokens) {
@@ -555,11 +636,11 @@ function openPosition(state: OnchainState, token: TokenCheck, pending: SleevePen
     pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message: "Five paper positions are already open." });
     return;
   }
-  if (state.cash < MAX_PER_TOKEN_USD) {
-    pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message: "Sleeve cash is under $100." });
+  const budget = state.config.walletGate ? MAX_PER_TOKEN_USD : state.config.tradeUsd;
+  if (state.cash < budget) {
+    pushLog(state, { ts: now, kind: "skip", address: token.address, symbol: token.symbol, message: `Sleeve cash is under $${budget.toFixed(0)}.` });
     return;
   }
-  const budget = MAX_PER_TOKEN_USD;
   const swap = budget - priorityUsd;
   const exec = token.price != null && token.quoteReserveUsd != null ? buyExecution(token.price, swap, token.quoteReserveUsd, token.feeRate) : null;
   if (!exec) {
@@ -590,7 +671,9 @@ function openPosition(state: OnchainState, token: TokenCheck, pending: SleevePen
     price: exec.price,
     fee: priorityUsd + (swap - exec.tokens * token.price!),
     pnl: 0,
-    note: `Paper buy ${FILL_DELAY_MS / 1000}s after ${pending.wallets.length} wallets. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`,
+    note: state.config.walletGate
+      ? `Paper buy ${FILL_DELAY_MS / 1000}s after ${pending.wallets.length} wallets. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`
+      : `Momentum buy ${FILL_DELAY_MS / 1000}s after the breakout. Impact ${(exec.impact * 100).toFixed(2)}%. Priority fee $${priorityUsd.toFixed(3)}.`,
   });
   pushLog(state, {
     ts: now,
@@ -605,18 +688,28 @@ export function onchainPublic(state: OnchainState, now = Date.now()) {
   const prices = new Map(state.positions.map((position) => [position.address, position.lastPrice]));
   const ranks = rankWallets(state.wallets, now).slice(0, 12);
   const realized = dayRealized(state, now);
+  const dayFills = state.fills.filter((fill) => dubaiDayKey(new Date(fill.ts)) === dubaiDayKey(new Date(now)));
+  const reasonOf = (note: string) => {
+    if (note.startsWith("Take profit")) return "take-profit";
+    if (note.startsWith("Hard stop")) return "hard-stop";
+    if (note.startsWith("Time stop")) return "time-stop";
+    if (note.startsWith("Max hold")) return "max-hold";
+    return null;
+  };
   return {
-    mode: "forward" as const,
+    mode: state.config.walletGate ? "smart-money" as const : "momentum" as const,
     principal: state.principal,
     cash: state.cash,
     equity: markSleeve(state, prices),
     dayPnl: realized,
+    dayPct: state.principal > 0 ? realized / state.principal : 0,
     paused: state.paused,
     pauseReason: state.pauseReason,
     openPositions: state.positions.length,
     positions: state.positions.map((position) => ({
       ...position,
-      stop: position.avgCost * (1 - HARD_STOP),
+      stop: position.avgCost * (1 - (state.config.walletGate ? HARD_STOP : state.config.hardStop)),
+      target: position.avgCost * (1 + (state.config.walletGate ? TAKE_HALF_AT : state.config.takeProfit)),
       ageMs: now - position.openedAt,
     })),
     pending: state.pending,
@@ -624,15 +717,20 @@ export function onchainPublic(state: OnchainState, now = Date.now()) {
     eligibleWallets: ranks.filter((row) => row.eligible).length,
     logs: state.logs.filter((log, index, all) => all.findIndex((row) => row.kind === log.kind && row.address === log.address && row.message === log.message) === index).slice(0, 40),
     fills: state.fills.slice(0, 20),
-    trades: state.fills.filter((fill) => dubaiDayKey(new Date(fill.ts)) === dubaiDayKey(new Date(now))).length,
+    trades: dayFills.length,
+    signals: state.logs.filter((log) => log.kind === "signal").length,
+    takeProfits: state.fills.filter((fill) => reasonOf(fill.note) === "take-profit").length,
+    hardStops: state.fills.filter((fill) => reasonOf(fill.note) === "hard-stop").length,
+    timeStops: state.fills.filter((fill) => reasonOf(fill.note) === "time-stop" || reasonOf(fill.note) === "max-hold").length,
+    config: state.config,
     breaches: state.logs.filter((log) => dubaiDayKey(new Date(log.ts)) === dubaiDayKey(new Date(now)) && log.kind === "pause").map((log) => log.message),
     lastTickAt: state.lastTickAt,
     lastError: state.lastError,
     gmgn: state.gmgn,
     startedAt: state.startedAt,
     solPriceNote: state.solPriceNote,
-    note: state.gmgn
-      ? "Forward paper test. Wallet scores use closed trades this process has seen, plus a GMGN 30-day card only when that payload includes P&L, win rate, trades, and hold time. No transaction is signed."
-      : "Forward paper test. GMGN is not configured, so there is no smart-money tape and no historical wallet P&L. Candidates are logged with the first failed safety check. No order is sent.",
+    note: state.config.walletGate
+      ? "Wallet gate is on. A buy still needs scored wallets plus the strict safety screen. Nothing is signed."
+      : "Momentum paper test. Wallet scoring is off. Entries are price and volume only, after mint, freeze, sellability, $50k liquidity, and 5 minutes of age. Take profit closes the full position at +20% of principal. Nothing is signed.",
   };
 }

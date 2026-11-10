@@ -1,6 +1,7 @@
 import { readConfig } from "../config";
 import { gmgnKol, gmgnPool, gmgnSecurity, gmgnSmartMoney, gmgnTopHolders } from "../brokers/gmgn";
 import { flag, num } from "../watchlist/gmgn-filter";
+import type { MomentumBar } from "./momentum";
 import {
   priorityFeeUsd,
   simulateSell,
@@ -289,6 +290,83 @@ export function parseGmgnTrade(raw: Record<string, unknown>): ObservedTrade | nu
   };
 }
 
+function parseOhlcv(payload: unknown): MomentumBar[] {
+  const list = payload && typeof payload === "object"
+    ? (payload as { data?: { attributes?: { ohlcv_list?: unknown[] } } }).data?.attributes?.ohlcv_list
+    : null;
+  if (!Array.isArray(list)) return [];
+  const bars: MomentumBar[] = [];
+  for (const row of list) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const time = Number(row[0]) * 1000;
+    const open = Number(row[1]);
+    const high = Number(row[2]);
+    const low = Number(row[3]);
+    const close = Number(row[4]);
+    const volume = Number(row[5]);
+    if (time > 0 && close > 0) bars.push({ time, open, high, low, close, volume });
+  }
+  bars.sort((a, b) => a.time - b.time);
+  return bars;
+}
+
+async function loadGeckoTokens(now: number): Promise<TokenCheck[]> {
+  const json = await cached("gecko-trend", 45_000, () => getJson("https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?page=1", "geckoterminal", 350));
+  const rows = json && typeof json === "object" && Array.isArray((json as { data?: unknown }).data) ? (json as { data: Record<string, unknown>[] }).data : [];
+  const tokens: TokenCheck[] = [];
+  for (const row of rows) {
+    if (tokens.length >= 6) break;
+    const attributes = row.attributes && typeof row.attributes === "object" ? row.attributes as Record<string, unknown> : {};
+    const relationships = row.relationships && typeof row.relationships === "object" ? row.relationships as Record<string, { data?: { id?: string } }> : {};
+    const dex = relationships.dex?.data?.id ?? "";
+    if (graduatedVenue(dex) !== true) continue;
+    const tokenId = relationships.base_token?.data?.id ?? "";
+    const address = tokenId.startsWith("solana_") ? tokenId.slice("solana_".length) : "";
+    const pool = typeof attributes.address === "string" ? attributes.address : "";
+    if (!address || !pool) continue;
+    const name = typeof attributes.name === "string" ? attributes.name.split("/")[0].trim() : address.slice(0, 4);
+    const reserve = Number(attributes.reserve_in_usd);
+    const price = Number(attributes.base_token_price_usd);
+    const tx = attributes.transactions && typeof attributes.transactions === "object" ? attributes.transactions as { m5?: { buys?: number }; h1?: { buys?: number } } : {};
+    const created = typeof attributes.pool_created_at === "string" ? Date.parse(attributes.pool_created_at) : NaN;
+    const token = blankToken(address, name);
+    token.price = price > 0 ? price : null;
+    token.liquidityUsd = Number.isFinite(reserve) ? reserve : null;
+    token.quoteReserveUsd = token.liquidityUsd != null && token.liquidityUsd > 0 ? token.liquidityUsd / 2 : null;
+    token.feeRate = feeFor(dex);
+    token.graduated = true;
+    token.venue = dex;
+    token.ageMs = Number.isFinite(created) ? Math.max(0, now - created) : null;
+    token.buyTx5m = tx.m5?.buys ?? null;
+    token.buyTxAvg = tx.h1?.buys != null ? tx.h1.buys / 12 : null;
+    token.volumeUsd = num((attributes.volume_usd as { h24?: unknown } | undefined)?.h24);
+    if (token.price != null && token.quoteReserveUsd != null) token.sellProceedsUsd = simulateSell(token.price, token.quoteReserveUsd, 100, token.feeRate);
+    try {
+      const candles = await cached(`ohlcv:${pool}`, 60_000, async () => {
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            return await getJson(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/ohlcv/minute?aggregate=5&limit=48&currency=usd`, "geckoterminal", 500);
+          } catch (error) {
+            lastError = error instanceof Error ? error : new Error("ohlcv failed");
+            await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+          }
+        }
+        throw lastError ?? new Error("ohlcv failed");
+      });
+      token.bars = parseOhlcv(candles);
+      const last = token.bars[token.bars.length - 1];
+      const prev = token.bars[token.bars.length - 2];
+      if (last && token.buyTx5m != null) last.buys = token.buyTx5m;
+      if (prev && token.buyTxAvg != null) prev.buys = token.buyTxAvg;
+    } catch {
+      token.bars = [];
+    }
+    tokens.push(token);
+  }
+  return tokens;
+}
+
 export async function loadMarket(now: number): Promise<TickInput> {
   const cfg = readConfig();
   let gmgn = Boolean(cfg.gmgn.apiKey);
@@ -309,20 +387,25 @@ export async function loadMarket(now: number): Promise<TickInput> {
       gmgnNote = error instanceof Error ? error.message : "GMGN feed failed";
     }
   }
-  const wanted = new Set<string>();
-  for (const trade of trades) {
-    if (trade.side === "buy" && wanted.size < 4) wanted.add(trade.token);
+  let tokens: TokenCheck[] = [];
+  try {
+    tokens = await loadGeckoTokens(now);
+  } catch {
+    tokens = [];
   }
-  if (!gmgn) {
+  if (tokens.length === 0) {
+    const wanted = new Set<string>();
+    for (const trade of trades) {
+      if (trade.side === "buy" && wanted.size < 4) wanted.add(trade.token);
+    }
     for (const address of await discoverSolanaTokens()) {
       if (wanted.size >= 6) break;
       wanted.add(address);
     }
-  }
-  const tokens: TokenCheck[] = [];
-  for (const address of wanted) {
-    const token = await loadPair(address, now);
-    if (token) tokens.push(token);
+    for (const address of wanted) {
+      const token = await loadPair(address, now);
+      if (token) tokens.push(token);
+    }
   }
   await loadMints(tokens);
   if (gmgn) {

@@ -39,6 +39,7 @@ interface Sleeve {
   cash: number;
   equity: number;
   dayPnl: number;
+  dayPct?: number;
   paused: boolean;
   pauseReason: string | null;
   openPositions: number;
@@ -48,6 +49,11 @@ interface Sleeve {
   eligibleWallets: number;
   logs: LogRow[];
   trades: number;
+  signals?: number;
+  takeProfits?: number;
+  hardStops?: number;
+  timeStops?: number;
+  config?: { tradeUsd: number; hardStop: number; takeProfit: number; walletGate: boolean };
   gmgn: boolean;
   lastError: string | null;
   note: string;
@@ -83,7 +89,7 @@ export default function OnchainPage() {
       <div>
         <h1 className="text-2xl font-semibold">On-chain</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-          Solana paper sleeve for pump.fun, PumpSwap, and Raydium. GMGN is a filter for wallets and safety, not a second price. The same pools are on-chain. This page never signs a transaction.
+          Solana meme momentum on pump.fun graduates, PumpSwap, and Raydium. A buy is a breakout with a volume surge, not a wallet score. This page never signs a transaction.
         </p>
       </div>
       {error && <div className="panel p-3 text-sm text-[var(--down)]">{error}</div>}
@@ -94,9 +100,9 @@ export default function OnchainPage() {
           {data.solPriceNote && <p className="text-sm text-[var(--down)]">{data.solPriceNote}</p>}
           <section className="grid gap-3 md:grid-cols-4">
             <Card label="Sleeve equity" value={usd(data.equity)} detail={`${usd(data.cash)} cash of ${usd(data.principal)}`} />
-            <Card label="Realized today" value={usd(data.dayPnl)} detail={`${data.trades} sleeve fills`} />
-            <Card label="Open" value={String(data.openPositions)} detail={data.paused ? "Entries paused" : "Max 5, $100 each"} />
-            <Card label="Scored wallets" value={String(data.eligibleWallets)} detail={data.gmgn ? "GMGN feed on" : "GMGN feed off"} />
+            <Card label="Realized today" value={usd(data.dayPnl)} detail={`${((data.dayPct ?? 0) * 100).toFixed(2)}% of the sleeve · ${data.trades} fills`} />
+            <Card label="Open" value={String(data.openPositions)} detail={data.paused ? "Entries paused" : `Max 5, $${data.config?.tradeUsd ?? 150} each`} />
+            <Card label="Exits" value={`${data.takeProfits ?? 0} TP`} detail={`${data.hardStops ?? 0} stops · ${data.timeStops ?? 0} time`} />
           </section>
           <div className="panel p-4">
             <div className="mb-2 flex items-center gap-2">
@@ -105,14 +111,14 @@ export default function OnchainPage() {
               <Badge tone="accent">{data.mode}</Badge>
             </div>
             <p className="text-sm text-[var(--muted)]">
-              {data.pauseReason ?? "Daily loss limit is $250. Hard stop −35%. Half off at +50%, then a 20% trail. Max hold 24h. A fill waits 8 seconds and pays pool impact plus a priority fee."}
+              {data.pauseReason ?? `Daily loss pause is $250. Take profit closes the full position at +20% of principal. Hard stop −${Math.round((data.config?.hardStop ?? 0.09) * 100)}%. Time stop if price never reaches +5% within 45 minutes. Max hold 3h. Size $${data.config?.tradeUsd ?? 150}. Wallet scoring is ${data.config?.walletGate ? "on" : "off"}. A fill waits 8 seconds and pays pool impact plus a priority fee.`}
             </p>
             {data.lastError && <p className="mt-2 text-sm text-[var(--down)]">{data.lastError}</p>}
           </div>
           <div className="panel overflow-x-auto p-4">
             <h2 className="mb-3 text-sm font-medium">Paper positions</h2>
             {data.positions.length === 0 && data.pending.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">No open paper positions. A buy needs three scored wallets in 30 minutes and a safety gate that passes on real fields. Missing data is a skip, not a pass.</p>
+              <p className="text-sm text-[var(--muted)]">No open paper positions. A buy needs a 30-minute breakout, 5-minute volume at least 3× its recent average, rising buy counts, and accelerating price. Mint and freeze must be revoked, a sell must return funds, liquidity must be at least $50,000, and the pool must be at least 5 minutes old.</p>
             ) : (
               <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="text-xs uppercase text-[var(--muted)]">
@@ -139,9 +145,10 @@ export default function OnchainPage() {
             {data.pending.length > 0 && <p className="mt-3 text-sm text-[var(--muted)]">{data.pending.length} fill{data.pending.length === 1 ? "" : "s"} waiting out the delay.</p>}
           </div>
           <div className="panel overflow-x-auto p-4">
-            <h2 className="mb-3 text-sm font-medium">Tracked wallets</h2>
+            <h2 className="mb-3 text-sm font-medium">Wallet scores</h2>
+            <p className="mb-3 text-sm text-[var(--muted)]">Kept in the code and turned off. Momentum does not wait for a smart-money cluster.</p>
             {data.wallets.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">No wallet tape yet. Without GMGN, this list stays empty and no entry can fire. Scores need realized P&L, win rate, trade count, and median hold over 30–90 days. Bots, sub-second holds, and insider tags are excluded.</p>
+              <p className="text-sm text-[var(--muted)]">No wallet tape is being collected while the gate is off.</p>
             ) : (
               <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="text-xs uppercase text-[var(--muted)]">

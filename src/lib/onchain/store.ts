@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { updateLedger } from "../store";
+import { normalizeConfig } from "./momentum";
 import { SLEEVE_USD, emptyOnchain, type OnchainState } from "./model";
 
 const file = path.join(process.cwd(), "data", "onchain.json");
@@ -14,6 +15,7 @@ export function readOnchain(now = Date.now()): OnchainState {
     parsed.pending ??= [];
     parsed.logs ??= [];
     parsed.fills ??= [];
+    parsed.config = normalizeConfig(parsed.config);
     return parsed;
   } catch {
     return emptyOnchain(now, 0);
