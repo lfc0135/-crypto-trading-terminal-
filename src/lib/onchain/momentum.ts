@@ -15,6 +15,25 @@ export interface MomentumConfig {
   minAgeMs: number;
 }
 
+/** The +20% rule. Stays selectable even if a tighter combo becomes the default. */
+export const CLASSIC_MOMENTUM = {
+  takeProfit: 0.2,
+  hardStop: 0.09,
+  progressPct: 0.05,
+  progressWindowMs: 45 * 60_000,
+  maxHoldMs: 3 * 60 * 60_000,
+} as const;
+
+/** Six combos. Not a full factorial. The classic +20% rule is reported beside them and is not in this list. */
+export const TUNE_GRID = [
+  { id: "tp10-stop6-p3-20m-hold60", takeProfit: 0.1, hardStop: 0.06, progressPct: 0.03, progressWindowMs: 20 * 60_000, maxHoldMs: 60 * 60_000 },
+  { id: "tp10-stop8-p5-30m-hold90", takeProfit: 0.1, hardStop: 0.08, progressPct: 0.05, progressWindowMs: 30 * 60_000, maxHoldMs: 90 * 60_000 },
+  { id: "tp10-stop9-p3-30m-hold60", takeProfit: 0.1, hardStop: 0.09, progressPct: 0.03, progressWindowMs: 30 * 60_000, maxHoldMs: 60 * 60_000 },
+  { id: "tp12-stop6-p5-20m-hold90", takeProfit: 0.12, hardStop: 0.06, progressPct: 0.05, progressWindowMs: 20 * 60_000, maxHoldMs: 90 * 60_000 },
+  { id: "tp12-stop8-p3-30m-hold60", takeProfit: 0.12, hardStop: 0.08, progressPct: 0.03, progressWindowMs: 30 * 60_000, maxHoldMs: 60 * 60_000 },
+  { id: "tp12-stop9-p5-20m-hold90", takeProfit: 0.12, hardStop: 0.09, progressPct: 0.05, progressWindowMs: 20 * 60_000, maxHoldMs: 90 * 60_000 },
+] as const;
+
 export function defaultMomentumConfig(): MomentumConfig {
   return {
     walletGate: false,
@@ -41,11 +60,60 @@ export function normalizeConfig(raw: Partial<MomentumConfig> | null | undefined)
     ...raw,
     walletGate: raw.walletGate === true,
     tradeUsd: trade >= 100 && trade <= 250 ? trade : base.tradeUsd,
-    hardStop: stop >= 0.08 && stop <= 0.1 ? stop : base.hardStop,
-    takeProfit: 0.2,
+    hardStop: stop >= 0.06 && stop <= 0.09 ? stop : base.hardStop,
+    takeProfit: preset(raw.takeProfit, [0.1, 0.12, 0.2], base.takeProfit),
+    progressPct: preset(raw.progressPct, [0.03, 0.05], base.progressPct),
+    progressWindowMs: preset(raw.progressWindowMs, [20 * 60_000, 30 * 60_000, 45 * 60_000], base.progressWindowMs),
+    maxHoldMs: preset(raw.maxHoldMs, [60 * 60_000, 90 * 60_000, 3 * 60 * 60_000], base.maxHoldMs),
     lookbackBars: raw.lookbackBars && raw.lookbackBars >= 3 && raw.lookbackBars <= 12 ? raw.lookbackBars : base.lookbackBars,
     volumeMultiple: raw.volumeMultiple && raw.volumeMultiple >= 2 && raw.volumeMultiple <= 8 ? raw.volumeMultiple : base.volumeMultiple,
   };
+}
+
+export function halfDays(times: number[]): { trainFrom: number; trainUntil: number; testFrom: number; testUntil: number; trainDays: string[]; testDays: string[] } | null {
+  const days = [...new Set(times.map((time) => new Date(time).toISOString().slice(0, 10)))].sort();
+  if (days.length < 2) return null;
+  const mid = Math.ceil(days.length / 2);
+  const trainDays = days.slice(0, mid);
+  const testDays = days.slice(mid);
+  if (testDays.length === 0) return null;
+  const testFrom = Date.parse(`${testDays[0]}T00:00:00Z`);
+  const testUntil = Date.parse(`${testDays[testDays.length - 1]}T00:00:00Z`) + 24 * 60 * 60 * 1000;
+  return {
+    trainFrom: Date.parse(`${trainDays[0]}T00:00:00Z`),
+    trainUntil: testFrom,
+    testFrom,
+    testUntil,
+    trainDays,
+    testDays,
+  };
+}
+
+/** Highest out-of-sample daily sleeve return among combos with enough trades. In-sample is ignored. */
+export function presetPatch(id: string): Partial<MomentumConfig> | null {
+  if (id === "classic-tp20") return { ...CLASSIC_MOMENTUM, walletGate: false };
+  const row = TUNE_GRID.find((item) => item.id === id);
+  if (!row) return null;
+  return {
+    takeProfit: row.takeProfit,
+    hardStop: row.hardStop,
+    progressPct: row.progressPct,
+    progressWindowMs: row.progressWindowMs,
+    maxHoldMs: row.maxHoldMs,
+    walletGate: false,
+  };
+}
+
+export function pickOosWinner<T extends { id: string; oosDaily: number; oosTrades: number }>(rows: T[], minTrades = 15): T | null {
+  const eligible = rows.filter((row) => row.oosTrades >= minTrades && row.oosDaily > 0);
+  if (eligible.length === 0) return null;
+  return eligible.reduce((best, row) => (row.oosDaily > best.oosDaily ? row : best));
+}
+
+function preset(value: number | undefined, allowed: number[], fallback: number): number {
+  if (value == null || !Number.isFinite(value)) return fallback;
+  const hit = allowed.find((item) => Math.abs(item - value) < 1e-6);
+  return hit ?? fallback;
 }
 
 export interface MomentumBar {
@@ -165,7 +233,12 @@ interface OpenReplay {
  * One shared $2,500 sleeve across the supplied names. Same-bar stop is assumed
  * before take-profit. Buy counts are used when a bar has them.
  */
-export function replayPortfolio(series: ReplaySeries[], config: MomentumConfig, priorityUsd = 0.02): ReplayReport {
+export function replayPortfolio(
+  series: ReplaySeries[],
+  config: MomentumConfig,
+  priorityUsd = 0.02,
+  window?: { from?: number; until?: number },
+): ReplayReport {
   const usable = series.filter((row) => row.safetyPass && row.bars.length > config.lookbackBars + 3 && row.quoteReserveUsd > 0);
   const times = [...new Set(usable.flatMap((row) => row.bars.map((bar) => bar.time)))].sort((a, b) => a - b);
   const barAt = new Map<string, Map<number, MomentumBar>>();
@@ -234,6 +307,8 @@ export function replayPortfolio(series: ReplaySeries[], config: MomentumConfig, 
       paused = dayPnl <= -250;
       continue;
     }
+    const openWindow = (window?.from == null || time >= window.from) && (window?.until == null || time < window.until);
+    if (!openWindow) continue;
     for (const row of usable) {
       if (open.some((position) => position.symbol === row.symbol)) continue;
       if (open.length >= 5 || cash < config.tradeUsd) continue;
@@ -265,7 +340,9 @@ export function replayPortfolio(series: ReplaySeries[], config: MomentumConfig, 
   const wins = trades.filter((trade) => trade.pnlUsd > 0);
   const losses = trades.filter((trade) => trade.pnlUsd <= 0);
   const avg = (rows: ReplayTrade[]) => (rows.length ? rows.reduce((sum, trade) => sum + trade.pnlPct, 0) / rows.length : null);
-  const spanMs = times.length > 1 ? times[times.length - 1] - times[0] : 0;
+  const spanStart = window?.from ?? times[0] ?? 0;
+  const spanEnd = window?.until ?? times[times.length - 1] ?? spanStart;
+  const spanMs = spanEnd > spanStart ? spanEnd - spanStart : (times.length > 1 ? times[times.length - 1] - times[0] : 0);
   const spanDays = spanMs > 0 ? spanMs / (24 * 60 * 60 * 1000) : 0;
   const totalPnlUsd = trades.reduce((sum, trade) => sum + trade.pnlUsd, 0);
   const tradeDays = dayReturns.filter((value) => value !== 0);

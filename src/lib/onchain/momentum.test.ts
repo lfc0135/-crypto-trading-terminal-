@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyOnchain, stepOnchain, type TokenCheck } from "./model";
-import { defaultMomentumConfig, evaluateMomentumSafety, momentumBreakout, replayPortfolio, type MomentumBar } from "./momentum";
+import { defaultMomentumConfig, evaluateMomentumSafety, halfDays, momentumBreakout, pickOosWinner, replayPortfolio, type MomentumBar } from "./momentum";
 
 function bar(time: number, close: number, volume: number, high = close, low = close * 0.99): MomentumBar {
   return { time, open: close, high, low, close, volume, buys: 10 };
@@ -82,7 +82,7 @@ describe("meme momentum", () => {
     const winner = safeToken({ price: state.positions[0].avgCost * 1.25 });
     stepOnchain(state, { now: now + 60_000, trades: [], tokens: [winner], priorityUsd: 0.02, gmgn: false, solPriceNote: null });
     expect(state.positions).toHaveLength(0);
-    expect(state.logs.some((log) => log.message.includes("Take profit at +20%"))).toBe(true);
+    expect(state.logs.some((log) => /Take profit at \+\d+%/.test(log.message))).toBe(true);
     expect(state.cash).toBeGreaterThan(2_500 - spent + spent * 0.15);
 
     const again = emptyOnchain(now);
@@ -116,5 +116,23 @@ describe("meme momentum", () => {
     expect(report.excludedSafety).toBe(1);
     expect(report.trades.length).toBeGreaterThan(0);
     expect(report.trades.some((trade) => trade.reason === "take-profit" || trade.reason === "hard-stop")).toBe(true);
+  });
+
+  it("scores the later half only and ignores a strong in-sample loser", () => {
+    const split = halfDays([
+      Date.parse("2026-11-01T00:00:00Z"),
+      Date.parse("2026-11-02T00:00:00Z"),
+      Date.parse("2026-11-03T00:00:00Z"),
+      Date.parse("2026-11-04T00:00:00Z"),
+    ]);
+    expect(split?.trainDays).toEqual(["2026-11-01", "2026-11-02"]);
+    expect(split?.testDays).toEqual(["2026-11-03", "2026-11-04"]);
+    const winner = pickOosWinner([
+      { id: "hot-train", oosDaily: -0.02, oosTrades: 40 },
+      { id: "quiet-test", oosDaily: 0.004, oosTrades: 20 },
+      { id: "thin", oosDaily: 0.05, oosTrades: 3 },
+    ]);
+    expect(winner?.id).toBe("quiet-test");
+    expect(pickOosWinner([{ id: "down", oosDaily: -0.01, oosTrades: 30 }])).toBeNull();
   });
 });

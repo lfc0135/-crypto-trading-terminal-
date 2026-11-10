@@ -53,7 +53,7 @@ interface Sleeve {
   takeProfits?: number;
   hardStops?: number;
   timeStops?: number;
-  config?: { tradeUsd: number; hardStop: number; takeProfit: number; walletGate: boolean };
+  config?: { tradeUsd: number; hardStop: number; takeProfit: number; progressPct: number; progressWindowMs: number; maxHoldMs: number; walletGate: boolean };
   gmgn: boolean;
   lastError: string | null;
   note: string;
@@ -63,6 +63,20 @@ interface Sleeve {
 export default function OnchainPage() {
   const [data, setData] = useState<Sleeve | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  async function applyPreset(preset: string) {
+    const res = await fetch("/api/onchain", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ preset }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      setError(body.error || "Could not switch the paper preset");
+      return;
+    }
+    setData(body);
+  }
 
   useEffect(() => {
     let stop = false;
@@ -111,9 +125,15 @@ export default function OnchainPage() {
               <Badge tone="accent">{data.mode}</Badge>
             </div>
             <p className="text-sm text-[var(--muted)]">
-              {data.pauseReason ?? `Daily loss pause is $250. Take profit closes the full position at +20% of principal. Hard stop −${Math.round((data.config?.hardStop ?? 0.09) * 100)}%. Time stop if price never reaches +5% within 45 minutes. Max hold 3h. Size $${data.config?.tradeUsd ?? 150}. Wallet scoring is ${data.config?.walletGate ? "on" : "off"}. A fill waits 8 seconds and pays pool impact plus a priority fee.`}
+              {data.pauseReason ?? `Daily loss pause is $250. Take profit closes the full position at +${Math.round((data.config?.takeProfit ?? 0.2) * 100)}% of principal. Hard stop −${Math.round((data.config?.hardStop ?? 0.09) * 100)}%. Time stop if price never reaches +${Math.round((data.config?.progressPct ?? 0.05) * 100)}% within ${Math.round((data.config?.progressWindowMs ?? 45 * 60_000) / 60_000)} minutes. Max hold ${Math.round((data.config?.maxHoldMs ?? 3 * 60 * 60_000) / 60_000)} minutes. Size $${data.config?.tradeUsd ?? 150}. The +20% classic preset stays available. Wallet scoring is ${data.config?.walletGate ? "on" : "off"}.`}
             </p>
             {data.lastError && <p className="mt-2 text-sm text-[var(--down)]">{data.lastError}</p>}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("classic-tp20")}>+20% classic</button>
+              <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("tp10-stop6-p3-20m-hold60")}>+10% / −6% / 20m</button>
+              <button type="button" className="rounded-md border border-[var(--line)] px-3 py-1 text-xs" onClick={() => applyPreset("tp12-stop8-p3-30m-hold60")}>+12% / −8% / 30m</button>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">The six tighter combos lost money out of sample, so none replaced the +20% default. These buttons only change the paper sleeve.</p>
           </div>
           <div className="panel overflow-x-auto p-4">
             <h2 className="mb-3 text-sm font-medium">Paper positions</h2>

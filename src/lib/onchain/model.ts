@@ -469,7 +469,7 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
         note = "Time stop. Price never reached +5% inside the window.";
       } else if (mid >= position.avgCost * (1 + cfg.takeProfit)) {
         qty = position.qty;
-        note = "Take profit at +20% of principal.";
+        note = `Take profit at +${Math.round(cfg.takeProfit * 100)}% of principal.`;
       }
       if (qty > 0) {
         const exec = sellExecution(mid, qty, token.quoteReserveUsd, position.feeRate);
@@ -731,6 +731,6 @@ export function onchainPublic(state: OnchainState, now = Date.now()) {
     solPriceNote: state.solPriceNote,
     note: state.config.walletGate
       ? "Wallet gate is on. A buy still needs scored wallets plus the strict safety screen. Nothing is signed."
-      : "Momentum paper test. Wallet scoring is off. Entries are price and volume only, after mint, freeze, sellability, $50k liquidity, and 5 minutes of age. Take profit closes the full position at +20% of principal. Nothing is signed.",
+      : `Momentum paper test. Wallet scoring is off. Take profit closes the full position at +${Math.round(state.config.takeProfit * 100)}%. Hard stop −${Math.round(state.config.hardStop * 100)}%. Time stop if price never reaches +${Math.round(state.config.progressPct * 100)}% within ${Math.round(state.config.progressWindowMs / 60_000)} minutes. Max hold ${Math.round(state.config.maxHoldMs / 60_000)} minutes. The +20% classic preset stays selectable. Nothing is signed.`,
   };
 }
