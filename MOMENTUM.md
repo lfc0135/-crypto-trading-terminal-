@@ -36,3 +36,7 @@ First momentum ticks after the switch: 0 signals, 0 fills, 0 open positions, day
 ## Pullback entry
 
 An optional paper preset waits for the first pullback after a hype spike instead of buying the breakout. The default is still the breakout +20% rule above. See `PULLBACK.md`.
+
+## Strategy search
+
+A walk-forward search over 94 combos and seven families (rugs included) found nothing reliably profitable out of sample. The default is unchanged. See `STRATEGY_SEARCH.md`.
