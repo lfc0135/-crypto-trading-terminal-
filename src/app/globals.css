@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0c1016;
+  --panel: #141b24;
+  --panel-2: #1b2430;
+  --line: #2a3544;
+  --text: #e7edf5;
+  --muted: #8e9bb0;
+  --accent: #d6b15e;
+  --accent-ink: #241b0c;
+  --up: #3dbe8a;
+  --down: #ef5d6f;
+  --background: var(--bg);
+  --foreground: var(--text);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(214, 177, 94, 0.08), transparent 50%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+button, input, select { font: inherit; color: inherit; }
+
+::selection { background: rgba(214, 177, 94, 0.35); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.num { font-family: var(--font-geist-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.muted { color: var(--muted); }
+.accent { color: var(--accent); }

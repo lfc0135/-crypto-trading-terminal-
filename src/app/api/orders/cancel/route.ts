@@ -1,0 +1,13 @@
+import { cancelOrder } from "@/lib/server/desk";
+import { handle } from "@/lib/server/http";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export function POST(request: Request) {
+  return handle(async () => {
+    const body = (await request.json()) as { id?: string };
+    if (!body.id) throw new Error("Order id is required.");
+    return cancelOrder(body.id);
+  });
+}
