@@ -1,0 +1,170 @@
+{
+  "generatedAt": "2026-11-10T20:08:56.534Z",
+  "note": "No config cleared the out-of-sample gates. BTC-USDT, ETH-USDT, and SOL-USDT, plus the trend, breakout, and intraday grids, did not produce eight training trades, so they were not promoted. None of the train survivors has a positive return and a positive Sharpe after costs, and none put a day inside the 2\u20133% band. Nothing is armed.",
+  "rows": [
+    {
+      "strategyId": "mean-reversion",
+      "bar": "1H",
+      "params": {
+        "period": 30,
+        "entryZ": 2,
+        "exitZ": 0.25,
+        "atrPeriod": 14,
+        "atrMult": 2
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 10,
+        "expectancy": 28.235702976539493,
+        "totalReturnPct": 0.004952512994577107,
+        "maxDrawdownPct": 0.010012125491593003,
+        "sharpe": 1.2246357325692026,
+        "hitRate": 0,
+        "days": 42,
+        "endingEquity": 50247.625649728856
+      },
+      "test": {
+        "trades": 4,
+        "expectancy": 0.027356097111663757,
+        "totalReturnPct": 2.188487768933101e-06,
+        "maxDrawdownPct": 0.004623641059805377,
+        "sharpe": -0.18365016859385724,
+        "hitRate": 0,
+        "days": 18,
+        "endingEquity": 49985.047750055484
+      },
+      "fragile": false,
+      "rejectReason": "out-of-sample result is flat or negative after costs",
+      "selected": true,
+      "armed": false,
+      "symbol": "ZEC-USDT"
+    },
+    {
+      "strategyId": "mean-reversion",
+      "bar": "15m",
+      "params": {
+        "period": 30,
+        "entryZ": 1.2,
+        "exitZ": 0.25,
+        "atrPeriod": 14,
+        "atrMult": 3
+      },
+      "filters": {
+        "trend": true,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 8,
+        "expectancy": -20.92854066323671,
+        "totalReturnPct": -0.0033549491448968682,
+        "maxDrawdownPct": 0.008917833384443512,
+        "sharpe": -2.081749047000617,
+        "hitRate": 0,
+        "days": 17,
+        "endingEquity": 49832.25254275516
+      },
+      "test": {
+        "trades": 7,
+        "expectancy": -29.308212752974345,
+        "totalReturnPct": -0.0041031497854164085,
+        "maxDrawdownPct": 0.005565242829532193,
+        "sharpe": -5.349922784943431,
+        "hitRate": 0,
+        "days": 7,
+        "endingEquity": 49794.6096962132
+      },
+      "fragile": false,
+      "rejectReason": "out-of-sample expectancy is not positive",
+      "selected": true,
+      "armed": false,
+      "symbol": "ZEC-USDT"
+    },
+    {
+      "strategyId": "mean-reversion",
+      "bar": "1H",
+      "params": {
+        "period": 14,
+        "entryZ": 1.2,
+        "exitZ": 0.25,
+        "atrPeriod": 14,
+        "atrMult": 2
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 14,
+        "expectancy": -15.890355764426001,
+        "totalReturnPct": -0.0044792112978006005,
+        "maxDrawdownPct": 0.01072479129365157,
+        "sharpe": -1.654436275145364,
+        "hitRate": 0,
+        "days": 42,
+        "endingEquity": 49776.03943510997
+      },
+      "test": {
+        "trades": 8,
+        "expectancy": -70.37241702563819,
+        "totalReturnPct": -0.01125958672410211,
+        "maxDrawdownPct": 0.014390945069656796,
+        "sharpe": -7.322110549005916,
+        "hitRate": 0,
+        "days": 18,
+        "endingEquity": 49436.50263246473
+      },
+      "fragile": false,
+      "rejectReason": "out-of-sample expectancy is not positive",
+      "selected": true,
+      "armed": false,
+      "symbol": "XRP-USDT"
+    },
+    {
+      "strategyId": "mean-reversion",
+      "bar": "15m",
+      "params": {
+        "period": 30,
+        "entryZ": 2,
+        "exitZ": 0.25,
+        "atrPeriod": 14,
+        "atrMult": 3
+      },
+      "filters": {
+        "trend": false,
+        "volatility": false,
+        "trail": false
+      },
+      "train": {
+        "trades": 9,
+        "expectancy": -16.17581093027833,
+        "totalReturnPct": -0.002925969770596004,
+        "maxDrawdownPct": 0.007415366469229168,
+        "sharpe": -1.9043594822723768,
+        "hitRate": 0,
+        "days": 17,
+        "endingEquity": 49853.7015114702
+      },
+      "test": {
+        "trades": 6,
+        "expectancy": -88.79402498081593,
+        "totalReturnPct": -0.01065528299769791,
+        "maxDrawdownPct": 0.013027769979685137,
+        "sharpe": -10.916341167890167,
+        "hitRate": 0,
+        "days": 7,
+        "endingEquity": 49466.82534655212
+      },
+      "fragile": false,
+      "rejectReason": "out-of-sample expectancy is not positive",
+      "selected": true,
+      "armed": false,
+      "symbol": "XRP-USDT"
+    }
+  ]
+}

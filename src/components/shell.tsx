@@ -10,6 +10,8 @@ const links = [
   ["/markets", "Markets"],
   ["/trade", "Trade"],
   ["/strategies", "Strategies"],
+  ["/tuning", "Tuning"],
+  ["/trader", "Auto"],
   ["/risk", "Risk"],
   ["/journal", "Journal"],
 ];

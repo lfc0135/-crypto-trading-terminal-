@@ -32,6 +32,8 @@ export interface Signal {
   qty?: number;
   /** Entries always fill on the next bar's open. Session flats may fill this close. */
   fill?: "next-open" | "this-close";
+  /** Raise a long stop toward price. The engine never loosens it. */
+  trailStop?: number;
   reason?: string;
 }
 
@@ -50,6 +52,8 @@ export interface BacktestConfig {
   lotSz: number;
   /** Frozen daily simple rate on borrowed USDT. */
   borrowDailyRate: number;
+  /** Ignore entry and exit signals before this bar. History is still visible so indicators can warm up. */
+  signalFromIndex?: number;
   targets: { dailyLow: number; dailyHigh: number };
 }
 
@@ -82,6 +86,7 @@ export interface BacktestResult {
   liquidations: number;
   leverage: number;
   rejectedEntries: number;
+  rejectNotes: string[];
   monthlyReturns: MonthRow[];
   daily: DailyTargetReport;
   equityCurve: { time: number; equity: number }[];
@@ -144,6 +149,11 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
   let entryPrice = 0;
   let borrowPaid = 0;
   let liquidations = 0;
+  const rejectNotes: string[] = [];
+  const reject = (reason: string) => {
+    rejectedEntries += 1;
+    if (rejectNotes.length < 6) rejectNotes.push(reason);
+  };
   let pending: Pending | null = null;
   let feesPaid = 0;
   let rejectedEntries = 0;
@@ -219,7 +229,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       const fee = feeOf(fill * pending.qty, cfg.feeBps);
       const parts = marginAndBorrow(fill * pending.qty, leverage);
       if (!decision.allowed || parts.margin + fee > cash) {
-        rejectedEntries += 1;
+        reject(decision.allowed ? "not enough cash for margin" : decision.reasons[0] ?? "rejected at the fill");
       } else if (leverage > 1) {
         cash -= parts.margin + fee;
         qty = pending.qty;
@@ -279,7 +289,13 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       initialEquity: cfg.initialEquity,
     });
 
-    if (signal.action === "close" && qty > 0 && !pending) {
+    const tradable = cfg.signalFromIndex == null || i >= cfg.signalFromIndex;
+    if (tradable && qty > 0 && signal.trailStop != null && signal.trailStop < bar.close && (stop == null || signal.trailStop > stop)) {
+      stop = signal.trailStop;
+    }
+    if (!tradable) {
+      /* warmup only */
+    } else if (signal.action === "close" && qty > 0 && !pending) {
       if (signal.fill === "this-close") closeAt(bar.close, bar.time, signal.reason ?? "session flat");
       else pending = { kind: "close", qty, stopLoss: null, takeProfit: null, reason: signal.reason ?? "exit" };
     } else if (signal.action === "buy" && qty === 0 && !pending) {
@@ -287,7 +303,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
       let orderQty = signal.qty;
       if (orderQty == null) {
         if (stopLoss == null) {
-          rejectedEntries += 1;
+          reject("entry had no stop");
         } else {
           const sized = sizeLongSpot({
             equity: equityNow,
@@ -302,8 +318,9 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
             dayStartEquity: dayStart,
             dailyKillLatched: false,
             drawdownKillLatched: false,
+            leverage,
           });
-          if (!sized.ok) rejectedEntries += 1;
+          if (!sized.ok) reject(sized.reasons[0] ?? "sizer rejected the entry");
           else orderQty = sized.qty;
         }
       }
@@ -325,7 +342,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
             feeBps: cfg.feeBps,
           },
         });
-        if (!decision.allowed) rejectedEntries += 1;
+        if (!decision.allowed) reject(decision.reasons[0] ?? "risk engine rejected the entry");
         else {
           pending = {
             kind: "buy",
@@ -377,6 +394,7 @@ export function runBacktest(candles: Candle[], strategy: StrategyInstance, confi
     liquidations,
     leverage,
     rejectedEntries,
+    rejectNotes,
     monthlyReturns: monthlyReturns(curve, cfg.initialEquity, cfg.principal),
     daily,
     equityCurve: curve,

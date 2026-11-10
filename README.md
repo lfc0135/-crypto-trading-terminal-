@@ -94,6 +94,26 @@ Chains in this desk: Solana, BSC, Base.
 
 `src/lib/risk` is the risk engine. `src/lib/backtest` is the backtester. `src/lib/strategies` holds the four strategies. `src/lib/brokers` talks to OKX and GMGN. `src/lib/trading/book.ts` is the paper book. State is a JSON file in `data/` (gitignored), one process.
 
+## Run 24/7
+
+The paper auto-trader is a loop in the same Node process as `next start` (`src/instrumentation.ts`). It reads `data/ledger.json`. Keep that directory on a persistent disk.
+
+```bash
+npm run build
+npm start
+```
+
+Or, in a second process, `npm run trader`. A lock file stops two loops from sending the same paper order. The loop does nothing until you press Start on the Auto page, and it never calls the live OKX or GMGN order routes.
+
+Docker, with the ledger on a volume:
+
+```bash
+docker build -t desk .
+docker run --rm -p 43123:43123 -v desk-data:/app/data desk
+```
+
+On a small VPS, Fly.io, or Railway, mount a volume at `/app/data` and run the same image. Put keys in the host environment only if you later arm live trading by hand. The auto-trader ignores those keys.
+
 ## Limitations
 
 - No equities and no FX. OKX orders are isolated margin on USDT pairs (2× cap), not perp swaps. On-chain orders are unlevered. Shorts are not opened.
@@ -104,5 +124,5 @@ Chains in this desk: Solana, BSC, Base.
 - GMGN documents IPv4 only. A 401/403 with a valid key can be an IPv6 path.
 - Paper stops fill from the last polled mark. A gap between polls is only as good as the next price.
 - Backtest Sharpe uses bar-close returns and a 0% risk-free rate. Under 30 Dubai days it is labeled unstable.
-- The JSON ledger is single-process. Do not run two servers against the same `data/ledger.json`.
+- The JSON ledger is meant for one trading loop. A lock file keeps a second loop from double-filling, but two web servers writing the same file can still race.
 - Funding, borrow, and withdrawal are out of scope. The OKX key instructions omit withdrawal on purpose.

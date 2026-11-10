@@ -153,10 +153,29 @@ export interface Account {
   liveConfirmedAt: string | null;
 }
 
+export interface TraderAssignment {
+  symbol: string;
+  strategyId: string;
+  bar: string;
+  params: Record<string, number>;
+  filters: { trend: boolean; volatility: boolean; trail: boolean };
+  armed: boolean;
+  note: string;
+}
+
+export interface TraderState {
+  enabled: boolean;
+  assignments: TraderAssignment[];
+  lastBar: Record<string, number>;
+  lastTickAt: number | null;
+  lastError: string | null;
+}
+
 export interface Ledger {
   version: 1;
   account: Account;
   settings: Settings;
+  trader?: TraderState;
 }
 
 export interface OkxTicker {
