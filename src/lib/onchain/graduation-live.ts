@@ -142,7 +142,7 @@ class Spacer {
   }
 }
 // GMGN free tier ~5 weight / 5 s shared with the logger; trenches weighs 2. One call per 12 s keeps us well inside.
-const gmgnSpacer = new Spacer(12_000);
+const gmgnSpacer = new Spacer(20_000);
 // GeckoTerminal free tier ~30 calls/min shared with the logger. One call per 3 s = 20/min.
 const geckoSpacer = new Spacer(3_000);
 
@@ -162,9 +162,10 @@ export async function fetchGraduates(state: LiveState): Promise<Graduate[] | nul
   }).catch((e: unknown) => { throw new Error(`GMGN fetch failed: ${e instanceof Error ? e.message : "network"}`); });
   if (res.status === 429) {
     state.stats.gmgn429 += 1;
-    const body = (await res.json().catch(() => ({}))) as { reset_at?: number };
+    const body = (await res.json().catch(() => ({}))) as { reset_at?: number; error?: string; message?: string };
+    state.stats.lastError = `GMGN 429 ${body.error ?? body.message ?? ""} reset_at=${body.reset_at ?? res.headers.get("x-ratelimit-reset") ?? "?"}`;
     const reset = Number(body.reset_at ?? res.headers.get("x-ratelimit-reset"));
-    gmgnSpacer.blockedUntil = Number.isFinite(reset) && reset > 1e9 ? Math.min(reset * 1000, Date.now() + 120_000) : Date.now() + 10_000;
+    gmgnSpacer.blockedUntil = Number.isFinite(reset) && reset > 1e9 ? Math.min(reset * 1000, Date.now() + 120_000) : Date.now() + 30_000;
     return null;
   }
   if (!res.ok) throw new Error(`GMGN HTTP ${res.status}`);
@@ -266,10 +267,10 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
   const inProgress = bars.find((b) => b.time === closed[closed.length - 1].time + BAR_MS);
   if (inProgress) tapeForEntry.push(inProgress);
   const tape: Tape = { symbol: w.symbol, pool: w.pool, bars: tapeForEntry, quoteReserveUsd: 0, createdMs: w.gradMs, rugged: false, graduatedMs: w.gradMs };
-  // Live honesty: only a fill on the bar that is open right now (or opened within the last 5.5 minutes) counts.
+  // Live honesty: only a fill on a bar that opened within the last 2 minutes counts (we check ~25 s after each close).
   // A signal that already happened before we looked is not tradable at its old price.
   const all = candidates(tape, ENTRY);
-  const cands = all.filter((c) => now - tapeForEntry[c.fillIdx].time <= 5.5 * 60_000);
+  const cands = all.filter((c) => now - tapeForEntry[c.fillIdx].time <= 2 * 60_000);
   if (all.length > cands.length && !w.note?.startsWith("stale")) {
     w.note = "stale signal ignored";
     journal("skip", { symbol: w.symbol, pool: w.pool, reason: "an earlier signal bar was missed (it closed before we were watching); waiting for a fresh one inside the window" });
