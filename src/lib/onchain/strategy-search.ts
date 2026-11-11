@@ -80,6 +80,9 @@ export interface SimTrade {
   pnlUsd: number;
   pnlPct: number;
   reason: string;
+  /** Bar time of the half-at-target sale, if it happened (live journal uses this). */
+  scaledAt?: number | null;
+  scaleProceedsUsd?: number | null;
 }
 
 export const TRADE_USD = 150;
@@ -264,12 +267,12 @@ function sellAt(tape: Tape, time: number, mid: number, qty: number): number {
 }
 
 /** Walk one trade forward on its own tape. Stop is checked before any target in the same bar. */
-export function simulate(tape: Tape, c: Candidate, exit: ExitRule): SimTrade | null {
+export function simulate(tape: Tape, c: Candidate, exit: ExitRule, tradeUsd: number = TRADE_USD): SimTrade | null {
   const bars = tape.bars;
   const fillBar = bars[c.fillIdx];
   const r0 = reserveAt(tape, fillBar.time);
   if (!(r0 > 0)) return null;
-  const exec = buyExecution(fillBar.open * (1 + thinSlip(r0 * 2)), TRADE_USD - PRIORITY_USD, r0, POOL_FEE);
+  const exec = buyExecution(fillBar.open * (1 + thinSlip(r0 * 2)), tradeUsd - PRIORITY_USD, r0, POOL_FEE);
   if (!exec) return null;
   const ref = fillBar.open;
   let stop = exit.useStructureStop && c.stop != null ? c.stop : ref * (1 - (exit.stopPct ?? 0.09));
@@ -279,6 +282,8 @@ export function simulate(tape: Tape, c: Candidate, exit: ExitRule): SimTrade | n
   let qty = exec.tokens;
   let proceeds = 0;
   let scaled = false;
+  let scaledAt: number | null = null;
+  let scaleProceedsUsd: number | null = null;
   let peak = ref;
   let reason = "end-of-tape";
   let exitTime = bars[bars.length - 1].time;
@@ -301,9 +306,12 @@ export function simulate(tape: Tape, c: Candidate, exit: ExitRule): SimTrade | n
         const part = qty * exit.scaleFraction;
         const r = reserveAt(tape, b.time);
         const ex = sellExecution(target * (1 - thinSlip(r * 2)), part, r, POOL_FEE);
-        proceeds += ex ? Math.max(0, Math.min(ex.proceeds, participationCap(tape, b.time)) - PRIORITY_USD) : 0;
+        const got = ex ? Math.max(0, Math.min(ex.proceeds, participationCap(tape, b.time)) - PRIORITY_USD) : 0;
+        proceeds += got;
         qty -= part;
         scaled = true;
+        scaledAt = b.time;
+        scaleProceedsUsd = got;
         if (exit.breakevenAfterScale) stop = Math.max(stop, ref);
       } else if (exit.scaleFraction == null) {
         done(b.time, target, "take-profit");
@@ -316,8 +324,8 @@ export function simulate(tape: Tape, c: Candidate, exit: ExitRule): SimTrade | n
     if (b.time - fillBar.time >= exit.maxHoldMs) { done(b.time, b.close, "max-hold"); break; }
   }
   if (qty > 0) done(exitTime, bars[bars.length - 1].close, "end-of-tape");
-  const pnl = proceeds - TRADE_USD;
-  return { symbol: c.symbol, pool: c.pool, rugged: c.rugged, entryTime: fillBar.time, exitTime, pnlUsd: pnl, pnlPct: pnl / TRADE_USD, reason };
+  const pnl = proceeds - tradeUsd;
+  return { symbol: c.symbol, pool: c.pool, rugged: c.rugged, entryTime: fillBar.time, exitTime, pnlUsd: pnl, pnlPct: pnl / tradeUsd, reason, scaledAt, scaleProceedsUsd };
 }
 
 /** Shared sleeve: max 5 open, one per pool, $250 realized daily loss pause (UTC day). */

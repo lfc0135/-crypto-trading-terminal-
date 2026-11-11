@@ -88,7 +88,7 @@ describe("on-chain paper rules", () => {
   it("fills later and worse than the signal, then stops, halves, and pauses", () => {
     const now = Date.UTC(2026, 10, 10, 12);
     const state = emptyOnchain(now);
-    state.config = { ...state.config, walletGate: true };
+    state.config = { ...state.config, walletGate: true, legacyEntries: true };
     const sample = token();
     stepOnchain(state, { now, trades: [buy("A", now - 1_000), buy("B", now - 1_000), buy("C", now - 1_000)], tokens: [sample], priorityUsd: 0.02, gmgn: true, solPriceNote: null });
     expect(state.pending).toHaveLength(1);
@@ -106,7 +106,7 @@ describe("on-chain paper rules", () => {
     expect(state.logs.some((log) => log.message.includes("Hard stop"))).toBe(true);
 
     const again = emptyOnchain(now);
-    again.config = { ...again.config, walletGate: true };
+    again.config = { ...again.config, walletGate: true, legacyEntries: true };
     stepOnchain(again, { now, trades: [buy("A", now), buy("B", now), buy("C", now)], tokens: [sample], priorityUsd: 0.02, gmgn: true, solPriceNote: null });
     stepOnchain(again, { now: now + 8_000, trades: [], tokens: [sample], priorityUsd: 0.02, gmgn: true, solPriceNote: null });
     const winner = token({ price: 1.6 });

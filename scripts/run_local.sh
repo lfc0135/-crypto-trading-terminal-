@@ -27,5 +27,14 @@ start_one() {
 start_one server npx next start -p 43123 -H 0.0.0.0
 TRADER_STANDALONE=1 start_one trader npx tsx src/trader/main.ts
 ONCHAIN_STANDALONE=1 start_one onchain npx tsx src/onchain/main.ts
+# Graduation-window paper trader (the only active on-chain strategy). It has its own restart loop and pid file.
+if [[ -f run/graduation.pid ]] && kill -0 "$(cat run/graduation.pid)" 2>/dev/null; then
+  echo "graduation already running (pid $(cat run/graduation.pid))"
+else
+  setsid nohup bash scripts/graduation-loop.sh > /dev/null 2>&1 &
+  sleep 1
+  echo "graduation started (pid $(cat run/graduation.pid 2>/dev/null), log run/graduation.log, journal data/graduation/journal.jsonl)"
+fi
 echo "Desk: http://127.0.0.1:43123"
 echo "Day score: curl -s http://127.0.0.1:43123/api/summary"
+echo "Graduation results: npx tsx scripts/graduation-report.ts"

@@ -72,7 +72,11 @@ describe("meme momentum", () => {
 
   it("takes the full position off at +20% of principal and stops a loser", () => {
     const now = Date.UTC(2026, 10, 10, 12);
+    const off = emptyOnchain(now);
+    stepOnchain(off, { now, trades: [], tokens: [safeToken()], priorityUsd: 0.02, gmgn: false, solPriceNote: null });
+    expect(off.pending).toHaveLength(0); // legacy entries are off by default since 11 Nov 2026
     const state = emptyOnchain(now);
+    state.config.legacyEntries = true;
     const sample = safeToken();
     stepOnchain(state, { now, trades: [], tokens: [sample], priorityUsd: 0.02, gmgn: false, solPriceNote: null });
     expect(state.pending).toHaveLength(1);
@@ -86,6 +90,7 @@ describe("meme momentum", () => {
     expect(state.cash).toBeGreaterThan(2_500 - spent + spent * 0.15);
 
     const again = emptyOnchain(now);
+    again.config.legacyEntries = true;
     stepOnchain(again, { now, trades: [], tokens: [sample], priorityUsd: 0.02, gmgn: false, solPriceNote: null });
     stepOnchain(again, { now: now + 8_000, trades: [], tokens: [sample], priorityUsd: 0.02, gmgn: false, solPriceNote: null });
     const loser = safeToken({ price: again.positions[0].avgCost * 0.9 });

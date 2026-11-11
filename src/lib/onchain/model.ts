@@ -548,6 +548,13 @@ export function stepOnchain(state: OnchainState, input: TickInput): OnchainState
           : "Momentum mode. Wallet scoring is off. A buy needs a breakout, 3× volume, rising buys, and accelerating price. Safety is mint, freeze, a sell that returns funds, $50k liquidity, and 5 minutes of age.",
     });
   }
+  if (!state.config.legacyEntries) {
+    // Breakout, pullback and smart-money entries are switched off. Only the graduation-window paper account trades.
+    if (!state.logs.some((log) => log.message.startsWith("Legacy entries are off."))) {
+      pushLog(state, { ts: now, kind: "info", message: "Legacy entries are off. Breakout, pullback and smart-money entries are disabled; the graduation-window paper account is the only active strategy. Open positions here still get exits." });
+    }
+    return state;
+  }
   if (!state.config.walletGate) {
     const seenMomentum = new Set<string>();
     for (const token of input.tokens) {

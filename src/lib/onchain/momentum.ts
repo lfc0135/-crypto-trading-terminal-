@@ -36,6 +36,11 @@ export interface MomentumConfig {
   confirm: PullbackConfirm;
   maxPullbackBars: number;
   stopBuffer: number;
+  /**
+   * Breakout / pullback entries in this sleeve. Off since 11 Nov 2026: the only active paper strategy is the
+   * graduation window (src/onchain/graduation.ts). Exits on any open position still run. Code is kept.
+   */
+  legacyEntries: boolean;
 }
 
 /** The +20% rule. Stays selectable even if a tighter combo becomes the default. */
@@ -77,6 +82,7 @@ export function defaultMomentumConfig(): MomentumConfig {
     confirm: DEFAULT_PULLBACK.confirm,
     maxPullbackBars: DEFAULT_PULLBACK.maxPullbackBars,
     stopBuffer: DEFAULT_PULLBACK.stopBuffer,
+    legacyEntries: false,
   };
 }
 
@@ -89,6 +95,7 @@ export function normalizeConfig(raw: Partial<MomentumConfig> | null | undefined)
     ...base,
     ...raw,
     walletGate: raw.walletGate === true,
+    legacyEntries: raw.legacyEntries === true,
     tradeUsd: trade >= 100 && trade <= 250 ? trade : base.tradeUsd,
     hardStop: stop >= 0.06 && stop <= 0.09 ? stop : base.hardStop,
     takeProfit: preset(raw.takeProfit, [0.1, 0.12, 0.2], base.takeProfit),
