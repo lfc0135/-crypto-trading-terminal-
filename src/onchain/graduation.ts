@@ -3,7 +3,7 @@
  * GMGN is read with the read-only key for graduation detection; candles come from GeckoTerminal.
  * Journal: data/graduation/journal.jsonl. State: data/graduation/state.json.
  */
-import { DAILY_LOSS_PAUSE_USD, LIVE_TRADE_USD, MAX_OPEN, PRINCIPAL_USD, RULE_ID, cycle, journal, loadState, saveState } from "../lib/onchain/graduation-live";
+import { DAILY_LOSS_PAUSE_USD, ENTRY, LIVE_TRADE_USD, MAX_OPEN, PRINCIPAL_USD, RULE_ID, cycle, journal, loadState, saveState } from "../lib/onchain/graduation-live";
 
 let stopping = false;
 process.on("SIGTERM", () => { stopping = true; });
@@ -11,9 +11,23 @@ process.on("SIGINT", () => { stopping = true; });
 
 async function main() {
   const state = loadState();
+  if (state.rule !== RULE_ID) {
+    journal("parameter-change", {
+      field: "minGradVolUsd",
+      from: 10_000,
+      to: ENTRY.minGradVolUsd,
+      ruleFrom: state.rule,
+      ruleTo: RULE_ID,
+      openPositions: state.positions.map((p) => p.symbol),
+      closedTrades: state.closed.length,
+      realizedPnlUsd: +state.closed.reduce((s, t) => s + t.pnlUsd, 0).toFixed(2),
+      note: "first-bar volume threshold lowered to $5k; existing journal, open positions, and realized P&L kept",
+    });
+    state.rule = RULE_ID;
+  }
   saveState(state);
-  journal("start", { rule: RULE_ID, principalUsd: PRINCIPAL_USD, tradeUsd: LIVE_TRADE_USD, maxOpen: MAX_OPEN, dailyLossPauseUsd: DAILY_LOSS_PAUSE_USD, mode: "paper", openPositions: state.positions.length, pid: process.pid });
-  console.log(`${new Date().toISOString()} graduation paper trader started (rule ${RULE_ID}, $${PRINCIPAL_USD} paper principal, $${LIVE_TRADE_USD} a trade). Nothing is signed.`);
+  journal("start", { rule: RULE_ID, principalUsd: PRINCIPAL_USD, tradeUsd: LIVE_TRADE_USD, maxOpen: MAX_OPEN, dailyLossPauseUsd: DAILY_LOSS_PAUSE_USD, minGradVolUsd: ENTRY.minGradVolUsd, mode: "paper", openPositions: state.positions.length, pid: process.pid });
+  console.log(`${new Date().toISOString()} graduation paper trader started (rule ${RULE_ID}, first-bar volume $${ENTRY.minGradVolUsd}, $${PRINCIPAL_USD} paper principal, $${LIVE_TRADE_USD} a trade). Nothing is signed.`);
   while (!stopping) {
     const started = Date.now();
     try {

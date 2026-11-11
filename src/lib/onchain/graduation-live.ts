@@ -2,10 +2,11 @@
  * Live PAPER trading for the graduation-window strategy. Nothing is signed, no wallet is loaded,
  * and no order is ever sent. The GMGN key is used only for read-only market data.
  *
- * Rules are the backtest's train-selected config `g-grad-vol10k-half20-trail12` (STRATEGY_SEARCH.md):
+ * Rules started from the backtest's train-selected config `g-grad-vol10k-half20-trail12` (STRATEGY_SEARCH.md),
+ * with the first-bar volume floor lowered to $5k on 11 Nov 2026:
  * - Watch every pump.fun graduate (Pump.fun and pump_mayhem platforms on pump_amm / Raydium) quoted in SOL/USDC/USDT.
  *   Rugged or risky coins are NOT filtered out.
- * - The first post-graduation 5-minute bar must close up on at least $10k USD volume.
+ * - The first post-graduation 5-minute bar must close up on at least $5k USD volume.
  * - Enter at the open of the bar after the first up-closing bar whose fill is 5 to 30 minutes after graduation.
  * - Stop 0.5% under the post-graduation low (the migration bar contributes only its close), up to 99% wide.
  * - Sell half at +20%, then trail the rest 12% under the peak. Max hold 3 hours.
@@ -19,14 +20,20 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { candidates, simulate, type Bar, type EntryRule, type ExitRule, type Tape } from "./strategy-search";
+import { mentionClient, mentionJournalFields, type MentionAround } from "./x-mentions";
+
+/** Logging-only X mention reading. Never used to filter or delay a trade decision past a short timeout. */
+async function xMentions(symbol: string, token: string, aroundMs: number, around: MentionAround) {
+  return mentionJournalFields(await mentionClient().countAround(symbol, token, aroundMs, around), around);
+}
 
 export const PRINCIPAL_USD = 10_000;
 export const TRADE_FRACTION = 150 / 2_500; // 6% per trade, as in the backtest sleeve
 export const LIVE_TRADE_USD = PRINCIPAL_USD * TRADE_FRACTION; // $600
 export const MAX_OPEN = 5;
 export const DAILY_LOSS_PAUSE_USD = PRINCIPAL_USD * (250 / 2_500); // $1,000
-export const RULE_ID = "g-grad-vol10k-half20-trail12";
-export const ENTRY: EntryRule = { family: "graduation", minGradVolUsd: 10_000, gradMinMs: 5 * 60_000, gradMaxMs: 30 * 60_000 };
+export const RULE_ID = "g-grad-vol5k-half20-trail12";
+export const ENTRY: EntryRule = { family: "graduation", minGradVolUsd: 5_000, gradMinMs: 5 * 60_000, gradMaxMs: 30 * 60_000 };
 export const EXIT: ExitRule = { useStructureStop: true, stopPct: 0.09, takeProfit: 0.2, scaleFraction: 0.5, trailActivate: 0.2, trailPct: 0.12, maxHoldMs: 3 * 3_600_000, maxStructureStop: 0.99 };
 
 const BAR_MS = 5 * 60_000;
@@ -244,22 +251,24 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
   if (bars == null) { w.nextFetchAt = now + 30_000; return; }
   const closed = closedBars(bars, now);
   if (bars.length === 0 || closed.length === 0) {
-    if (now - w.gradMs > 40 * 60_000) { w.status = "dropped"; w.note = "no candles from GeckoTerminal within 40 minutes"; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note }); }
+    if (now - w.gradMs > 40 * 60_000) { w.status = "dropped"; w.note = "no candles from GeckoTerminal within 40 minutes"; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); }
     else w.nextFetchAt = Math.min(now + 60_000, nextBoundary(now));
     return;
   }
   if (Math.abs(bars[0].time - w.gradMs) > 10 * 60_000) {
     w.status = "dropped";
     w.note = `first candle is ${Math.round((bars[0].time - w.gradMs) / 60_000)} min from graduation (the backtest needs the tape to start within 10 min)`;
-    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note });
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
     return;
   }
   const b0 = bars[0];
   const b0Closed = closed.length >= 1;
-  if (b0Closed && !(b0.close > b0.open && b0.volume >= (ENTRY.minGradVolUsd ?? 10_000))) {
+  const minVol = ENTRY.minGradVolUsd ?? 5_000;
+  if (b0Closed && !(b0.close > b0.open && b0.volume >= minVol)) {
     w.status = "dropped";
-    w.note = `first 5-min bar ${b0.close > b0.open ? "closed up" : "closed down"} on $${Math.round(b0.volume).toLocaleString()} volume (needs up and $10k+)`;
-    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, bar0: b0 });
+    const floorLabel = minVol >= 1000 ? `$${Math.round(minVol / 1000)}k+` : `$${minVol}+`;
+    w.note = `first 5-min bar ${b0.close > b0.open ? "closed up" : "closed down"} on $${Math.round(b0.volume).toLocaleString()} volume (needs up and ${floorLabel})`;
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, bar0: b0, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
     return;
   }
   // Signal bars must be closed; the fill bar may be in progress (its open is final).
@@ -273,12 +282,12 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
   const cands = all.filter((c) => now - tapeForEntry[c.fillIdx].time <= 2 * 60_000);
   if (all.length > cands.length && !w.note?.startsWith("stale")) {
     w.note = "stale signal ignored";
-    journal("skip", { symbol: w.symbol, pool: w.pool, reason: "an earlier signal bar was missed (it closed before we were watching); waiting for a fresh one inside the window" });
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: "an earlier signal bar was missed (it closed before we were watching); waiting for a fresh one inside the window", ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
   }
   if (cands.length > 0) {
-    if (state.positions.length >= MAX_OPEN) { w.status = "dropped"; w.note = "signal, but 5 positions already open"; journal("skip", { symbol: w.symbol, pool: w.pool, reason: w.note }); return; }
+    if (state.positions.length >= MAX_OPEN) { w.status = "dropped"; w.note = "signal, but 5 positions already open"; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
     const realized = realizedToday(state, now);
-    if (realized <= -DAILY_LOSS_PAUSE_USD) { w.status = "dropped"; w.note = `signal, but daily loss pause is on (realized ${realized.toFixed(2)})`; journal("skip", { symbol: w.symbol, pool: w.pool, reason: w.note }); return; }
+    if (realized <= -DAILY_LOSS_PAUSE_USD) { w.status = "dropped"; w.note = `signal, but daily loss pause is on (realized ${realized.toFixed(2)})`; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
     const reserve = await fetchReserveUsd(state, w.pool);
     const quoteReserveUsd = reserve != null ? reserve / 2 : 0;
     tape.quoteReserveUsd = quoteReserveUsd;
@@ -293,23 +302,25 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
       };
       state.positions.push(pos);
       w.status = "entered";
-      journal("signal", { symbol: w.symbol, pool: w.pool, token: w.token, signalBar: tapeForEntry[c.fillIdx - 1], minutesAfterGraduation: Math.round((fill.time - w.gradMs) / 60_000) });
+      const entryMentions = await xMentions(w.symbol, w.token, fill.time, "entry");
+      journal("signal", { symbol: w.symbol, pool: w.pool, token: w.token, signalBar: tapeForEntry[c.fillIdx - 1], minutesAfterGraduation: Math.round((fill.time - w.gradMs) / 60_000), ...entryMentions });
       journal("entry", {
         symbol: w.symbol, pool: w.pool, token: w.token, sizeUsd: LIVE_TRADE_USD, fillBarOpen: fill.open, fillTime: new Date(fill.time).toISOString(),
         stop: c.stop, stopPctBelow: +(1 - c.stop / fill.open).toFixed(4), target20: fill.open * 1.2, poolReserveUsd: reserve, quoteDepthUsd: quoteReserveUsd,
         note: "paper only, nothing signed",
+        ...entryMentions,
       });
       return;
     }
     // Candidates existed but none could fill under the cost model (too thin / stop out of range). Keep watching in the window.
     const lastFill = cands[cands.length - 1];
-    journal("skip", { symbol: w.symbol, pool: w.pool, reason: "signal bar seen but the fill is rejected by the cost model (pool too thin for a $600 clip, or no depth yet)", fillTime: new Date(tapeForEntry[lastFill.fillIdx].time).toISOString(), poolReserveUsd: reserve });
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: "signal bar seen but the fill is rejected by the cost model (pool too thin for a $600 clip, or no depth yet)", fillTime: new Date(tapeForEntry[lastFill.fillIdx].time).toISOString(), poolReserveUsd: reserve, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
   }
   const lastPossibleFill = w.gradMs + (ENTRY.gradMaxMs ?? 30 * 60_000);
   if (closed[closed.length - 1].time + BAR_MS > lastPossibleFill + BAR_MS) {
     w.status = "dropped";
     w.note = "no fillable up-closing bar 5-30 minutes after graduation";
-    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note });
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
     return;
   }
   w.nextFetchAt = nextBoundary(now);
@@ -327,7 +338,7 @@ export async function evaluatePosition(state: LiveState, p: LivePosition, now: n
     if (now - p.fillTime > 4 * 3_600_000) {
       const last = bars[bars.length - 1];
       const pnl = last ? p.sizeUsd * (last.close / p.fillPrice - 1) : -p.sizeUsd;
-      closeTrade(state, p, { pnlUsd: pnl, exitTime: last?.time ?? now, reason: "tape-lost" });
+      await closeTrade(state, p, { pnlUsd: pnl, exitTime: last?.time ?? now, reason: "tape-lost" });
     }
     return;
   }
@@ -335,7 +346,7 @@ export async function evaluatePosition(state: LiveState, p: LivePosition, now: n
   const tape: Tape = { symbol: p.symbol, pool: p.pool, bars: closed, quoteReserveUsd: p.quoteReserveUsd, createdMs: p.gradMs, rugged: false, graduatedMs: p.gradMs };
   const sim = simulate(tape, { pool: p.pool, symbol: p.symbol, signalTime: p.signalTime, fillIdx, stop: p.stop, target: null, rugged: false }, EXIT, p.sizeUsd);
   if (!sim) {
-    closeTrade(state, p, { pnlUsd: 0, exitTime: p.fillTime, reason: "fill-rejected-on-recheck" });
+    await closeTrade(state, p, { pnlUsd: 0, exitTime: p.fillTime, reason: "fill-rejected-on-recheck" });
     return;
   }
   if (sim.scaledAt != null && !p.scaledLogged) {
@@ -346,15 +357,15 @@ export async function evaluatePosition(state: LiveState, p: LivePosition, now: n
     p.lastMarkUsd = sim.pnlUsd;
     return;
   }
-  closeTrade(state, p, { pnlUsd: sim.pnlUsd, exitTime: sim.exitTime, reason: sim.reason });
+  await closeTrade(state, p, { pnlUsd: sim.pnlUsd, exitTime: sim.exitTime, reason: sim.reason });
 }
 
-function closeTrade(state: LiveState, p: LivePosition, r: { pnlUsd: number; exitTime: number; reason: string }): void {
+async function closeTrade(state: LiveState, p: LivePosition, r: { pnlUsd: number; exitTime: number; reason: string }): Promise<void> {
   state.positions = state.positions.filter((x) => x.pool !== p.pool);
   const t: ClosedTrade = { pool: p.pool, token: p.token, symbol: p.symbol, fillTime: p.fillTime, exitTime: r.exitTime, sizeUsd: p.sizeUsd, pnlUsd: r.pnlUsd, pnlPct: r.pnlUsd / p.sizeUsd, reason: r.reason, closedAt: Date.now() };
   state.closed.push(t);
   const total = state.closed.reduce((s, x) => s + x.pnlUsd, 0);
-  journal("exit", { symbol: p.symbol, pool: p.pool, token: p.token, reason: r.reason, exitTime: new Date(r.exitTime).toISOString(), pnlUsdAfterCosts: +r.pnlUsd.toFixed(2), pnlPct: +(t.pnlPct * 100).toFixed(2), accountRealizedUsd: +total.toFixed(2), accountEquityUsd: +(PRINCIPAL_USD + total).toFixed(2) });
+  journal("exit", { symbol: p.symbol, pool: p.pool, token: p.token, reason: r.reason, exitTime: new Date(r.exitTime).toISOString(), pnlUsdAfterCosts: +r.pnlUsd.toFixed(2), pnlPct: +(t.pnlPct * 100).toFixed(2), accountRealizedUsd: +total.toFixed(2), accountEquityUsd: +(PRINCIPAL_USD + total).toFixed(2), ...(await xMentions(p.symbol, p.token, r.exitTime, "exit")) });
 }
 
 /** One detection + evaluation cycle. Returns a short status line. */
@@ -374,7 +385,7 @@ export async function cycle(state: LiveState): Promise<string> {
         newCount += 1;
         const w: Watch = { token: g.token, pool: g.pool, symbol: g.symbol, platform: g.platform, quote: g.quote, gradMs: g.gradMs, seenAt: now, status: e.ok ? "watching" : "dropped", note: e.ok ? undefined : e.why, nextFetchAt: now, fetches: 0 };
         state.watches[g.pool] = w;
-        journal("graduation", { symbol: g.symbol, token: g.token, pool: g.pool, platform: g.platform, venue: g.exchange, graduatedAt: new Date(g.gradMs).toISOString(), detectedAfterSec: Math.round((now - g.gradMs) / 1000), liquidityUsd: g.liquidity, watching: e.ok, reason: e.ok ? undefined : e.why });
+        journal("graduation", { symbol: g.symbol, token: g.token, pool: g.pool, platform: g.platform, venue: g.exchange, graduatedAt: new Date(g.gradMs).toISOString(), detectedAfterSec: Math.round((now - g.gradMs) / 1000), liquidityUsd: g.liquidity, watching: e.ok, reason: e.ok ? undefined : e.why, ...(e.ok ? await xMentions(g.symbol, g.token, g.gradMs, "graduation") : {}) });
       }
     }
   } catch (error) {
