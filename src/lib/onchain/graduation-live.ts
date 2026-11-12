@@ -32,9 +32,61 @@ export const TRADE_FRACTION = 150 / 2_500; // 6% per trade, as in the backtest s
 export const LIVE_TRADE_USD = PRINCIPAL_USD * TRADE_FRACTION; // $600
 export const MAX_OPEN = 5;
 export const DAILY_LOSS_PAUSE_USD = PRINCIPAL_USD * (250 / 2_500); // $1,000
-export const RULE_ID = "g-grad-vol5k-half20-trail12";
+export const RULE_ID = "g-grad-vol5k-half20-trail12-cap25-theme";
+export const PREV_RULE_ID = "g-grad-vol5k-half20-trail12";
+/** Per-trade loss cap (approved 12 Nov 2026): the stop is never wider than 25% under the fill, for the whole position. */
+export const LOSS_CAP_PCT = 0.25;
+
+/**
+ * Theme priority (approved 12 Nov 2026). Tagged graduations are processed first, size $900, and need only $3k on the
+ * first bar. At most 2 tagged entries per theme in any rolling 30 minutes.
+ */
+export const THEME_TRADE_USD = 900;
+export const THEME_MIN_GRAD_VOL_USD = 3_000;
+export const THEME_MAX_ENTRIES = 2;
+export const THEME_WINDOW_MS = 30 * 60_000;
+export const THEMES: { id: string; pattern: RegExp }[] = [
+  { id: "gta", pattern: /\bgta\s*6|\bgta|rockstar|vice\s*city/i },
+  { id: "jensen-nvidia", pattern: /jensen|huang|nvidia|nvda/i },
+];
+export function themeOf(...texts: (string | undefined | null)[]): string | null {
+  const hay = texts.filter(Boolean).join(" \n ");
+  for (const t of THEMES) if (t.pattern.test(hay)) return t.id;
+  return null;
+}
+
+/** Dubai calendar day (UTC+4, no DST) for the no-re-entry rule. */
+export function dubaiDay(ms: number): string { return new Date(ms + 4 * 3_600_000).toISOString().slice(0, 10); }
+/** Normalized full name and leading word, e.g. "Rockstar G" -> ["rockstarg", "rockstar"]. */
+export function nameKeys(...texts: (string | undefined | null)[]): string[] {
+  const keys = new Set<string>();
+  for (const t of texts) {
+    if (!t) continue;
+    const full = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    const lead = (t.toLowerCase().match(/[\p{L}\p{N}]+/u) ?? [""])[0];
+    if (full) keys.add(full);
+    if (lead) keys.add(lead);
+  }
+  return [...keys];
+}
+const STOP_REASONS = /^(stop|loss-cap)$/;
+/** After a stop-out or loss-cap exit, the same normalized name/symbol (or leading word) is blocked for that Dubai day. */
+export function reentryBlock(state: LiveState, symbol: string, name: string | undefined, now: number): string | null {
+  const mine = new Set(nameKeys(symbol, name));
+  const today = dubaiDay(now);
+  for (const t of state.closed) {
+    if (!STOP_REASONS.test(t.reason) || dubaiDay(t.exitTime) !== today) continue;
+    if (nameKeys(t.symbol, t.name).some((k) => mine.has(k))) return t.symbol;
+  }
+  return null;
+}
+export function themeEntriesInWindow(state: LiveState, theme: string, now: number): number {
+  const recent = (x: { theme?: string | null; openedAt?: number; fillTime: number }) => x.theme === theme && now - (x.openedAt ?? x.fillTime) < THEME_WINDOW_MS;
+  return state.positions.filter(recent).length + state.closed.filter((t) => recent({ theme: t.theme, openedAt: t.openedAt, fillTime: t.fillTime })).length;
+}
+
 export const ENTRY: EntryRule = { family: "graduation", minGradVolUsd: 5_000, gradMinMs: 5 * 60_000, gradMaxMs: 30 * 60_000 };
-export const EXIT: ExitRule = { useStructureStop: true, stopPct: 0.09, takeProfit: 0.2, scaleFraction: 0.5, trailActivate: 0.2, trailPct: 0.12, maxHoldMs: 3 * 3_600_000, maxStructureStop: 0.99 };
+export const EXIT: ExitRule = { useStructureStop: true, stopPct: 0.09, takeProfit: 0.2, scaleFraction: 0.5, trailActivate: 0.2, trailPct: 0.12, maxHoldMs: 3 * 3_600_000, maxStructureStop: 0.99, capStructureStop: LOSS_CAP_PCT };
 
 const BAR_MS = 5 * 60_000;
 const QUOTES = new Set([
@@ -59,6 +111,8 @@ export interface Watch {
   note?: string;
   nextFetchAt: number;
   fetches: number;
+  name?: string;
+  theme?: string | null;
 }
 
 export interface LivePosition {
@@ -76,6 +130,8 @@ export interface LivePosition {
   openedAt: number;
   lastMarkUsd: number | null;
   nextFetchAt: number;
+  name?: string;
+  theme?: string | null;
 }
 
 export interface ClosedTrade {
@@ -89,6 +145,9 @@ export interface ClosedTrade {
   pnlPct: number;
   reason: string;
   closedAt: number;
+  name?: string;
+  theme?: string | null;
+  openedAt?: number;
 }
 
 export interface LiveState {
@@ -136,6 +195,37 @@ export function saveState(s: LiveState): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Hard ceiling on every network call in the trader path, including reading the body. */
+export const NET_TIMEOUT_MS = 12_000;
+
+export interface NetResult { status: number; ok: boolean; headers: Headers; json: unknown }
+
+/**
+ * fetch with a hard deadline: an AbortController aborts the request and a racing timer rejects even if the
+ * runtime ignores the abort (a stuck socket or body read). The body is read inside the same deadline.
+ */
+export async function fetchWithDeadline(url: string, init: RequestInit = {}, ms = NET_TIMEOUT_MS, fetchImpl: typeof fetch = fetch): Promise<NetResult> {
+  const ac = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { ac.abort(); reject(new Error(`timeout after ${ms}ms`)); }, ms);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const res = await fetchImpl(url, { ...init, signal: ac.signal });
+        const text = await res.text();
+        let json: unknown = {};
+        try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
+        return { status: res.status, ok: res.ok, headers: res.headers, json };
+      })(),
+      deadline,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Simple spacing limiter: at most one call per `gapMs`, plus a back-off window after a 429. */
 class Spacer {
   private next = 0;
@@ -148,41 +238,78 @@ class Spacer {
     if (at > now) await sleep(at - now);
   }
 }
-// GMGN free tier ~5 weight / 5 s shared with the logger; trenches weighs 2. One call per 12 s keeps us well inside.
-const gmgnSpacer = new Spacer(20_000);
+
+/**
+ * GMGN pacing. Free tier is ~5 weight / 5 s shared with gmgn-logger; trenches weighs ~2-3. The trader polls at most
+ * once per 30 s and never sleeps waiting for GMGN: if a poll is not due, or we are backing off, the cycle skips
+ * detection and still manages open positions on GeckoTerminal bars.
+ */
+export const GMGN_POLL_MS = 30_000;
+export const GMGN_BACKOFF_BASE_MS = 30_000;
+export const GMGN_BACKOFF_CAP_MS = 5 * 60_000;
+export const gmgnGate = { nextAt: 0, strikes: 0, lastReason: "" };
+
+/** Exponential back-off with jitter: base * 2^(strikes-1), capped, then +/-20% jitter. Honours a later reset_at up to the cap. */
+export function gmgnBackoffMs(strikes: number, resetInMs: number | null, rand: () => number = Math.random): number {
+  const exp = Math.min(GMGN_BACKOFF_CAP_MS, GMGN_BACKOFF_BASE_MS * 2 ** Math.max(0, strikes - 1));
+  const jittered = exp * (0.8 + 0.4 * rand());
+  const withReset = resetInMs != null && resetInMs > jittered ? resetInMs : jittered;
+  return Math.round(Math.min(GMGN_BACKOFF_CAP_MS, withReset));
+}
+
 // GeckoTerminal free tier ~30 calls/min shared with the logger. One call per 3 s = 20/min.
 const geckoSpacer = new Spacer(3_000);
 
-export interface Graduate { token: string; pool: string; symbol: string; platform: string; exchange: string; quote: string; gradMs: number; liquidity: number | null }
+export interface Graduate { token: string; pool: string; symbol: string; name?: string; description?: string; platform: string; exchange: string; quote: string; gradMs: number; liquidity: number | null }
 
-/** Read-only GMGN trenches "completed" list. The key is never logged. */
-export async function fetchGraduates(state: LiveState): Promise<Graduate[] | null> {
+/** Read-only GMGN trenches "completed" list. The key is never logged. Returns "skip" when a poll is not due. */
+export async function fetchGraduates(state: LiveState): Promise<Graduate[] | "skip" | "backoff" | null> {
   const key = process.env.GMGN_API_KEY;
   if (!key) throw new Error("GMGN_API_KEY is not set in the environment.");
-  await gmgnSpacer.take();
-  const params = new URLSearchParams({ chain: "sol", timestamp: String(Math.floor(Date.now() / 1000)), client_id: crypto.randomUUID() });
-  const res = await fetch(`https://openapi.gmgn.ai/v1/trenches?${params}`, {
-    method: "POST",
-    headers: { "X-APIKEY": key, "content-type": "application/json", "User-Agent": "graduation-paper/0.1" },
-    body: JSON.stringify({ version: "v2", completed: { limit: 80 } }),
-    signal: AbortSignal.timeout(20_000),
-  }).catch((e: unknown) => { throw new Error(`GMGN fetch failed: ${e instanceof Error ? e.message : "network"}`); });
-  if (res.status === 429) {
+  const now = Date.now();
+  if (now < gmgnGate.nextAt) return gmgnGate.strikes > 0 ? "backoff" : "skip";
+  gmgnGate.nextAt = now + GMGN_POLL_MS;
+  const params = new URLSearchParams({ chain: "sol", timestamp: String(Math.floor(now / 1000)), client_id: crypto.randomUUID() });
+  let res: NetResult;
+  try {
+    res = await fetchWithDeadline(`https://openapi.gmgn.ai/v1/trenches?${params}`, {
+      method: "POST",
+      headers: { "X-APIKEY": key, "content-type": "application/json", "User-Agent": "graduation-paper/0.2" },
+      body: JSON.stringify({ version: "v2", completed: { limit: 80 } }),
+    });
+  } catch (e: unknown) {
+    throw new Error(`GMGN fetch failed: ${e instanceof Error ? e.message : "network"}`);
+  }
+  if (res.status === 429 || res.status === 403) {
     state.stats.gmgn429 += 1;
-    const body = (await res.json().catch(() => ({}))) as { reset_at?: number; error?: string; message?: string };
-    state.stats.lastError = `GMGN 429 ${body.error ?? body.message ?? ""} reset_at=${body.reset_at ?? res.headers.get("x-ratelimit-reset") ?? "?"}`;
+    const body = (res.json ?? {}) as { reset_at?: number; error?: string; message?: string; code?: string };
+    const reason = String(body.error ?? body.code ?? body.message ?? `HTTP ${res.status}`);
     const reset = Number(body.reset_at ?? res.headers.get("x-ratelimit-reset"));
-    gmgnSpacer.blockedUntil = Number.isFinite(reset) && reset > 1e9 ? Math.min(reset * 1000, Date.now() + 120_000) : Date.now() + 30_000;
+    const resetInMs = Number.isFinite(reset) && reset > 1e9 ? reset * 1000 - now : null;
+    gmgnGate.strikes += 1;
+    const wait = gmgnBackoffMs(gmgnGate.strikes, resetInMs);
+    gmgnGate.nextAt = now + wait;
+    gmgnGate.lastReason = reason;
+    state.stats.lastError = `GMGN ${res.status} ${reason} backoff=${Math.round(wait / 1000)}s`;
+    journal("ops", { kind: "gmgn-backoff", status: res.status, reason, strikes: gmgnGate.strikes, backoffSec: Math.round(wait / 1000), retryAt: new Date(now + wait).toISOString(), resetAt: resetInMs != null ? new Date(now + resetInMs).toISOString() : null, note: "detection paused; open positions still managed on GeckoTerminal bars" });
+    console.log(`${new Date().toISOString()} gmgn backoff ${res.status} ${reason} strikes=${gmgnGate.strikes} retry_in=${Math.round(wait / 1000)}s`);
     return null;
   }
   if (!res.ok) throw new Error(`GMGN HTTP ${res.status}`);
-  const json = (await res.json()) as { data?: { completed?: Record<string, unknown>[] } };
+  if (gmgnGate.strikes > 0) {
+    journal("ops", { kind: "gmgn-recovered", afterStrikes: gmgnGate.strikes, lastReason: gmgnGate.lastReason });
+    console.log(`${new Date().toISOString()} gmgn recovered after ${gmgnGate.strikes} back-off(s)`);
+  }
+  gmgnGate.strikes = 0;
+  const json = res.json as { data?: { completed?: Record<string, unknown>[] } };
   state.stats.gmgnOk += 1;
   const rows = json.data?.completed ?? [];
   return rows.map((x) => ({
     token: String(x.address ?? ""),
     pool: String(x.pool_address ?? ""),
     symbol: String(x.symbol ?? "?"),
+    name: x.name != null ? String(x.name) : undefined,
+    description: x.description != null ? String(x.description) : undefined,
     platform: String(x.launchpad_platform ?? ""),
     exchange: String(x.exchange ?? ""),
     quote: String(x.quote_address ?? ""),
@@ -202,16 +329,15 @@ export function eligible(g: Graduate): { ok: boolean; why: string } {
 /** 5-minute USD bars from GeckoTerminal (same source as the backtest). Includes the in-progress bar last. */
 export async function fetchBars(state: LiveState, pool: string): Promise<Bar[] | null> {
   await geckoSpacer.take();
-  const res = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/ohlcv/minute?aggregate=5&limit=100&currency=usd`, {
+  const res = await fetchWithDeadline(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}/ohlcv/minute?aggregate=5&limit=100&currency=usd`, {
     headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(20_000),
   }).catch(() => null);
   if (!res) return null;
   if (res.status === 429) { state.stats.gecko429 += 1; geckoSpacer.blockedUntil = Date.now() + 20_000; return null; }
   if (res.status === 404) return [];
   if (!res.ok) return null;
   state.stats.geckoOk += 1;
-  const json = (await res.json()) as { data?: { attributes?: { ohlcv_list?: number[][] } } };
+  const json = res.json as { data?: { attributes?: { ohlcv_list?: number[][] } } };
   return (json.data?.attributes?.ohlcv_list ?? [])
     .filter((r) => r[4] > 0)
     .map((r) => ({ time: r[0] * 1000, open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5] }))
@@ -221,12 +347,12 @@ export async function fetchBars(state: LiveState, pool: string): Promise<Bar[] |
 /** Current pool reserve (USD, both sides) from GeckoTerminal. */
 export async function fetchReserveUsd(state: LiveState, pool: string): Promise<number | null> {
   await geckoSpacer.take();
-  const res = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20_000) }).catch(() => null);
+  const res = await fetchWithDeadline(`https://api.geckoterminal.com/api/v2/networks/solana/pools/${pool}`, { headers: { accept: "application/json" } }).catch(() => null);
   if (!res) return null;
   if (res.status === 429) { state.stats.gecko429 += 1; geckoSpacer.blockedUntil = Date.now() + 20_000; return null; }
   if (!res.ok) return null;
   state.stats.geckoOk += 1;
-  const json = (await res.json()) as { data?: { attributes?: { reserve_in_usd?: string } } };
+  const json = res.json as { data?: { attributes?: { reserve_in_usd?: string } } };
   const v = Number(json.data?.attributes?.reserve_in_usd);
   return Number.isFinite(v) && v > 0 ? v : null;
 }
@@ -263,7 +389,9 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
   }
   const b0 = bars[0];
   const b0Closed = closed.length >= 1;
-  const minVol = ENTRY.minGradVolUsd ?? 5_000;
+  const entryRule: EntryRule = w.theme ? { ...ENTRY, minGradVolUsd: THEME_MIN_GRAD_VOL_USD } : ENTRY;
+  const tradeUsd = w.theme ? THEME_TRADE_USD : LIVE_TRADE_USD;
+  const minVol = entryRule.minGradVolUsd ?? 5_000;
   if (b0Closed && !(b0.close > b0.open && b0.volume >= minVol)) {
     w.status = "dropped";
     const floorLabel = minVol >= 1000 ? `$${Math.round(minVol / 1000)}k+` : `$${minVol}+`;
@@ -278,7 +406,7 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
   const tape: Tape = { symbol: w.symbol, pool: w.pool, bars: tapeForEntry, quoteReserveUsd: 0, createdMs: w.gradMs, rugged: false, graduatedMs: w.gradMs };
   // Live honesty: only a fill on a bar that opened within the last 2 minutes counts (we check ~25 s after each close).
   // A signal that already happened before we looked is not tradable at its old price.
-  const all = candidates(tape, ENTRY);
+  const all = candidates(tape, entryRule);
   const cands = all.filter((c) => now - tapeForEntry[c.fillIdx].time <= 2 * 60_000);
   if (all.length > cands.length && !w.note?.startsWith("stale")) {
     w.note = "stale signal ignored";
@@ -288,25 +416,29 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
     if (state.positions.length >= MAX_OPEN) { w.status = "dropped"; w.note = "signal, but 5 positions already open"; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
     const realized = realizedToday(state, now);
     if (realized <= -DAILY_LOSS_PAUSE_USD) { w.status = "dropped"; w.note = `signal, but daily loss pause is on (realized ${realized.toFixed(2)})`; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
+    const blockedBy = reentryBlock(state, w.symbol, w.name, now);
+    if (blockedBy) { w.status = "dropped"; w.note = `signal, but no re-entry today: ${blockedBy} was stopped out earlier this Dubai day`; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, theme: w.theme ?? null, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
+    if (w.theme && themeEntriesInWindow(state, w.theme, now) >= THEME_MAX_ENTRIES) { w.status = "dropped"; w.note = `signal, but copycat limit: ${THEME_MAX_ENTRIES} ${w.theme} entries already in the last 30 minutes`; journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, theme: w.theme, reason: w.note, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) }); return; }
     const reserve = await fetchReserveUsd(state, w.pool);
     const quoteReserveUsd = reserve != null ? reserve / 2 : 0;
     tape.quoteReserveUsd = quoteReserveUsd;
     // Take the first candidate that fills, as the backtest does.
     for (const c of cands) {
-      const sim = simulate({ ...tape, bars: tapeForEntry.slice(0, c.fillIdx + 1) }, c, EXIT, LIVE_TRADE_USD);
+      const sim = simulate({ ...tape, bars: tapeForEntry.slice(0, c.fillIdx + 1) }, c, EXIT, tradeUsd);
       if (!sim || c.stop == null) continue;
       const fill = tapeForEntry[c.fillIdx];
       const pos: LivePosition = {
         pool: w.pool, token: w.token, symbol: w.symbol, gradMs: w.gradMs, signalTime: c.signalTime, fillTime: fill.time, fillPrice: fill.open,
-        stop: c.stop, quoteReserveUsd, sizeUsd: LIVE_TRADE_USD, scaledLogged: false, openedAt: now, lastMarkUsd: null, nextFetchAt: nextBoundary(now),
+        stop: c.stop, quoteReserveUsd, sizeUsd: tradeUsd, scaledLogged: false, openedAt: now, lastMarkUsd: null, nextFetchAt: nextBoundary(now),
+        name: w.name, theme: w.theme ?? null,
       };
       state.positions.push(pos);
       w.status = "entered";
       const entryMentions = await xMentions(w.symbol, w.token, fill.time, "entry");
       journal("signal", { symbol: w.symbol, pool: w.pool, token: w.token, signalBar: tapeForEntry[c.fillIdx - 1], minutesAfterGraduation: Math.round((fill.time - w.gradMs) / 60_000), ...entryMentions });
       journal("entry", {
-        symbol: w.symbol, pool: w.pool, token: w.token, sizeUsd: LIVE_TRADE_USD, fillBarOpen: fill.open, fillTime: new Date(fill.time).toISOString(),
-        stop: c.stop, stopPctBelow: +(1 - c.stop / fill.open).toFixed(4), target20: fill.open * 1.2, poolReserveUsd: reserve, quoteDepthUsd: quoteReserveUsd,
+        symbol: w.symbol, pool: w.pool, token: w.token, theme: w.theme ?? null, sizeUsd: tradeUsd, fillBarOpen: fill.open, fillTime: new Date(fill.time).toISOString(),
+        stop: Math.max(c.stop, fill.open * (1 - LOSS_CAP_PCT)), structureStop: c.stop, stopPctBelow: +(1 - Math.max(c.stop, fill.open * (1 - LOSS_CAP_PCT)) / fill.open).toFixed(4), target20: fill.open * 1.2, poolReserveUsd: reserve, quoteDepthUsd: quoteReserveUsd,
         note: "paper only, nothing signed",
         ...entryMentions,
       });
@@ -314,7 +446,7 @@ export async function evaluateWatch(state: LiveState, w: Watch, now: number): Pr
     }
     // Candidates existed but none could fill under the cost model (too thin / stop out of range). Keep watching in the window.
     const lastFill = cands[cands.length - 1];
-    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: "signal bar seen but the fill is rejected by the cost model (pool too thin for a $600 clip, or no depth yet)", fillTime: new Date(tapeForEntry[lastFill.fillIdx].time).toISOString(), poolReserveUsd: reserve, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
+    journal("skip", { symbol: w.symbol, pool: w.pool, token: w.token, reason: "signal bar seen but the fill is rejected by the cost model (pool too thin for the clip, or no depth yet)", fillTime: new Date(tapeForEntry[lastFill.fillIdx].time).toISOString(), poolReserveUsd: reserve, ...(await xMentions(w.symbol, w.token, w.gradMs, "graduation")) });
   }
   const lastPossibleFill = w.gradMs + (ENTRY.gradMaxMs ?? 30 * 60_000);
   if (closed[closed.length - 1].time + BAR_MS > lastPossibleFill + BAR_MS) {
@@ -357,45 +489,67 @@ export async function evaluatePosition(state: LiveState, p: LivePosition, now: n
     p.lastMarkUsd = sim.pnlUsd;
     return;
   }
-  await closeTrade(state, p, { pnlUsd: sim.pnlUsd, exitTime: sim.exitTime, reason: sim.reason });
+  // A stop at the 25% cap (tighter than the structure stop) is reported as a loss-cap exit.
+  const capLevel = p.fillPrice * (1 - LOSS_CAP_PCT);
+  const reason = sim.reason === "stop" && capLevel > p.stop ? "loss-cap" : sim.reason;
+  await closeTrade(state, p, { pnlUsd: sim.pnlUsd, exitTime: sim.exitTime, reason });
 }
 
 async function closeTrade(state: LiveState, p: LivePosition, r: { pnlUsd: number; exitTime: number; reason: string }): Promise<void> {
   state.positions = state.positions.filter((x) => x.pool !== p.pool);
-  const t: ClosedTrade = { pool: p.pool, token: p.token, symbol: p.symbol, fillTime: p.fillTime, exitTime: r.exitTime, sizeUsd: p.sizeUsd, pnlUsd: r.pnlUsd, pnlPct: r.pnlUsd / p.sizeUsd, reason: r.reason, closedAt: Date.now() };
+  const t: ClosedTrade = { pool: p.pool, token: p.token, symbol: p.symbol, fillTime: p.fillTime, exitTime: r.exitTime, sizeUsd: p.sizeUsd, pnlUsd: r.pnlUsd, pnlPct: r.pnlUsd / p.sizeUsd, reason: r.reason, closedAt: Date.now(), name: p.name, theme: p.theme ?? null, openedAt: p.openedAt };
   state.closed.push(t);
   const total = state.closed.reduce((s, x) => s + x.pnlUsd, 0);
   journal("exit", { symbol: p.symbol, pool: p.pool, token: p.token, reason: r.reason, exitTime: new Date(r.exitTime).toISOString(), pnlUsdAfterCosts: +r.pnlUsd.toFixed(2), pnlPct: +(t.pnlPct * 100).toFixed(2), accountRealizedUsd: +total.toFixed(2), accountEquityUsd: +(PRINCIPAL_USD + total).toFixed(2), ...(await xMentions(p.symbol, p.token, r.exitTime, "exit")) });
 }
 
-/** One detection + evaluation cycle. Returns a short status line. */
+/** Called after each unit of work so the supervisor watchdog can tell a slow cycle from a stuck one. */
+export let onProgress: () => void = () => {};
+export function setProgressHook(fn: () => void): void { onProgress = fn; }
+
+/** One cycle: manage open positions first, then GMGN detection (never blocking), then due watches. */
 export async function cycle(state: LiveState): Promise<string> {
+  // 1. Exits first, on GeckoTerminal bars, whatever GMGN is doing.
+  for (const p of [...state.positions]) {
+    if (Date.now() >= p.nextFetchAt) {
+      try { await evaluatePosition(state, p, Date.now()); } catch (error) { p.nextFetchAt = Date.now() + 30_000; state.stats.lastError = `position ${p.symbol}: ${error instanceof Error ? error.message : String(error)}`; }
+    }
+    onProgress();
+  }
+  // 2. Detection.
   const now = Date.now();
   let newCount = 0;
   let gmgnStatus = "ok";
   try {
     const grads = await fetchGraduates(state);
-    if (grads == null) gmgnStatus = "429";
+    if (grads === "skip") gmgnStatus = "not-due";
+    else if (grads === "backoff") gmgnStatus = `backoff(${gmgnGate.lastReason},retry_in=${Math.max(0, Math.round((gmgnGate.nextAt - Date.now()) / 1000))}s)`;
+    else if (grads == null) gmgnStatus = `429(${gmgnGate.lastReason})`;
     else {
-      for (const g of grads) {
+      const tagged = grads.map((g) => ({ g, theme: themeOf(g.name, g.symbol, g.description) }));
+      tagged.sort((a, b) => Number(b.theme != null) - Number(a.theme != null));
+      for (const { g, theme } of tagged) {
         if (state.watches[g.pool]) continue;
         if (now - g.gradMs > 35 * 60_000) continue; // too late to see the 5-30 min window honestly
         const e = eligible(g);
         state.stats.graduationsSeen += 1;
         newCount += 1;
-        const w: Watch = { token: g.token, pool: g.pool, symbol: g.symbol, platform: g.platform, quote: g.quote, gradMs: g.gradMs, seenAt: now, status: e.ok ? "watching" : "dropped", note: e.ok ? undefined : e.why, nextFetchAt: now, fetches: 0 };
+        const w: Watch = { token: g.token, pool: g.pool, symbol: g.symbol, platform: g.platform, quote: g.quote, gradMs: g.gradMs, seenAt: now, status: e.ok ? "watching" : "dropped", note: e.ok ? undefined : e.why, nextFetchAt: now, fetches: 0, name: g.name, theme };
         state.watches[g.pool] = w;
-        journal("graduation", { symbol: g.symbol, token: g.token, pool: g.pool, platform: g.platform, venue: g.exchange, graduatedAt: new Date(g.gradMs).toISOString(), detectedAfterSec: Math.round((now - g.gradMs) / 1000), liquidityUsd: g.liquidity, watching: e.ok, reason: e.ok ? undefined : e.why, ...(e.ok ? await xMentions(g.symbol, g.token, g.gradMs, "graduation") : {}) });
+        journal("graduation", { symbol: g.symbol, token: g.token, pool: g.pool, platform: g.platform, venue: g.exchange, name: g.name, theme, graduatedAt: new Date(g.gradMs).toISOString(), detectedAfterSec: Math.round((now - g.gradMs) / 1000), liquidityUsd: g.liquidity, watching: e.ok, reason: e.ok ? undefined : e.why, ...(e.ok ? await xMentions(g.symbol, g.token, g.gradMs, "graduation") : {}) });
       }
     }
   } catch (error) {
     gmgnStatus = error instanceof Error ? error.message : "error";
     state.stats.lastError = gmgnStatus;
   }
-  // Open positions first, then watches in the order their bars close.
-  for (const p of [...state.positions]) if (Date.now() >= p.nextFetchAt) await evaluatePosition(state, p, Date.now());
-  const due = Object.values(state.watches).filter((w) => w.status === "watching" && Date.now() >= w.nextFetchAt).sort((a, b) => a.gradMs - b.gradMs);
-  for (const w of due) await evaluateWatch(state, w, Date.now());
+  onProgress();
+  // 3. Watches in the order their bars close.
+  const due = Object.values(state.watches).filter((w) => w.status === "watching" && Date.now() >= w.nextFetchAt).sort((a, b) => Number(b.theme != null) - Number(a.theme != null) || a.gradMs - b.gradMs);
+  for (const w of due) {
+    try { await evaluateWatch(state, w, Date.now()); } catch (error) { w.nextFetchAt = Date.now() + 30_000; state.stats.lastError = `watch ${w.symbol}: ${error instanceof Error ? error.message : String(error)}`; }
+    onProgress();
+  }
   // Forget old watches (keep 6 hours for the record).
   for (const [k, w] of Object.entries(state.watches)) if (w.status !== "watching" && now - w.gradMs > 6 * 3_600_000) delete state.watches[k];
   state.stats.cycles += 1;
